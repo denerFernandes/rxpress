@@ -12,8 +12,6 @@ export class RxSocket extends EventEmitter {
   public destroyed = false;
   public readonly remoteAddress: string;
   public readonly remoteFamily: string;
-  /** The engine does not report the peer port yet. */
-  public readonly remotePort: number | undefined = undefined;
   public readonly encrypted: boolean;
   public timeout: number | undefined = undefined;
   /** @internal */
@@ -25,6 +23,11 @@ export class RxSocket extends EventEmitter {
     this.remoteAddress = remoteAddress;
     this.remoteFamily = remoteAddress.includes(':') ? 'IPv6' : 'IPv4';
     this.encrypted = encrypted;
+  }
+
+  /** The client's TCP port (undefined when the request came through the Node bridge). */
+  get remotePort(): number | undefined {
+    return this._ownerReq._getRemotePort();
   }
 
   public setTimeout(msecs: number, cb?: () => void): this {

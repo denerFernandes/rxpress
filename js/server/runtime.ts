@@ -206,7 +206,7 @@ export class ServerRuntime {
         pos += 2;
         const remoteStart = pos;
         const remoteEnd = pos + remoteLen;
-        pos = remoteEnd;
+        pos = remoteEnd + 2; // the client's port follows the address; RxRequest reads it lazily
 
         const paramsLen = buf.readUInt32LE(pos);
         pos += 4;

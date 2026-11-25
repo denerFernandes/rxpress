@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- `req.socket.remotePort` is the client's port (the engine sends it next to the address), so `remoteAddress`, `remotePort` and `remoteFamily` are all filled in.
+- `req instanceof http.IncomingMessage` and `res instanceof http.ServerResponse` are true for rxpress's request and response, as in Express. The two Node classes recognise them; subclasses of the Node classes are unaffected.
 - Socket.IO works on rxpress: `new Server(app.listen())` and `new Server(http.createServer(app))` attach, and both the `polling` and `websocket` transports (and the upgrade between them) connect. The handle returned by `app.listen()` now has `listen()` (it throws `ERR_SERVER_ALREADY_LISTEN`, as in Node), which Socket.IO uses to recognise a server, and a server's `'request'` listeners are called as in Node: the app is one of them, a library that replaces the listeners sees every request, and without extra listeners requests keep going straight to the app.
 
 ### Added

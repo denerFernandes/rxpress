@@ -1,6 +1,6 @@
 //! Runtime, bind, accept loop, connection limits and graceful drain.
 
-use super::conn::handle_connection;
+use super::conn::{handle_connection, Peer};
 use super::{RunningServer, ServerShared, ShutdownBus};
 use crate::protocol::build_simple_raw_response;
 use crate::tls::{build_tls_acceptor, TlsInput};
@@ -389,7 +389,10 @@ fn spawn_connection(
     let guard = ConnectionGuard {
         shared: shared_conn.clone(),
     };
-    let peer_ip: Arc<str> = Arc::from(peer_addr.ip().to_string());
+    let peer = Peer {
+        ip: Arc::from(peer_addr.ip().to_string()),
+        port: peer_addr.port(),
+    };
     let bus_conn = bus.clone();
 
     tokio::spawn(async move {
@@ -419,7 +422,7 @@ fn spawn_connection(
             handle_connection(
                 tls_stream,
                 shared_conn,
-                peer_ip,
+                peer,
                 true,
                 &bus_conn,
                 shard,
@@ -430,7 +433,7 @@ fn spawn_connection(
             handle_connection(
                 stream,
                 shared_conn,
-                peer_ip,
+                peer,
                 false,
                 &bus_conn,
                 shard,

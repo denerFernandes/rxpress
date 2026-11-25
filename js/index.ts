@@ -4,10 +4,12 @@ import { createRouter, Route, Router } from './router.js';
 import { RxRequest } from './request.js';
 import { RxResponse } from './response.js';
 import type { RouterOptions } from './types.js';
+import { installHttpInstanceof } from './http-instanceof.js';
 import { installNodeServerInterception, RxServer } from './node-server.js';
 
 // `http.createServer(app)` / `https.createServer(opts, app)` run rxpress apps on the native engine.
 installNodeServerInterception();
+installHttpInstanceof();
 
 export interface RxpressFactory {
   (): Application;

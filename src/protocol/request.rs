@@ -17,6 +17,8 @@ pub struct PendingRequest {
     pub raw_url: Bytes,
     pub path_len: u32,
     pub remote_addr: Arc<str>,
+    /// The client's TCP port, written right after the address.
+    pub remote_port: u16,
     pub params: Vec<(String, String)>,
     pub raw_headers: Bytes,
     pub body: Bytes,
@@ -51,7 +53,10 @@ impl PendingRequest {
             .checked_add(4)?
             .checked_add(self.raw_url.len())?
             .checked_add(4)?;
-        sz = sz.checked_add(2)?.checked_add(self.remote_addr.len())?;
+        sz = sz
+            .checked_add(2)?
+            .checked_add(self.remote_addr.len())?
+            .checked_add(2)?; // len + addr + port
         sz = sz.checked_add(4)?; // params_block_len
         if !self.params.is_empty() {
             let mut params_block_len: usize = 2;
@@ -91,7 +96,7 @@ impl PendingRequest {
             sz = sz.saturating_add(2 + self.method_str.as_deref().map_or(0, |s| s.len()));
         }
         sz = sz.saturating_add(4 + self.raw_url.len() + 4); // raw_url + path_len
-        sz = sz.saturating_add(2 + self.remote_addr.len()); // remote_addr
+        sz = sz.saturating_add(2 + self.remote_addr.len() + 2); // remote_addr + port
         sz = sz.saturating_add(4); // params_block_len
         if !self.params.is_empty() {
             sz = sz.saturating_add(2);
@@ -165,6 +170,8 @@ impl PendingRequest {
         p += 2;
         dst[p..p + ab.len()].copy_from_slice(ab);
         p += ab.len();
+        dst[p..p + 2].copy_from_slice(&self.remote_port.to_le_bytes());
+        p += 2;
 
         // params block
         if self.params.is_empty() {
@@ -234,6 +241,7 @@ mod tests {
             raw_url: Bytes::from_static(b"/test"),
             path_len: 5,
             remote_addr: Arc::from("127.0.0.1"),
+            remote_port: 40000,
             params: vec![("k".into(), "v".into())],
             raw_headers: Bytes::new(),
             body: Bytes::new(),

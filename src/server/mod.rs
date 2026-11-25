@@ -409,6 +409,7 @@ mod tests {
             raw_url: Bytes::from_static(b"/hello"),
             path_len: 6,
             remote_addr: Arc::from("127.0.0.1"),
+            remote_port: 40000,
             params: Vec::new(),
             raw_headers: Bytes::new(),
             body: Bytes::from(vec![b'a'; 1024]),
