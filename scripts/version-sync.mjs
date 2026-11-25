@@ -1,5 +1,5 @@
-// Copies the root package.json version into every npm/<triple>/package.json and into the root
-// optionalDependencies, so the platform packages always match the main package.
+// Copies the root package.json version into every npm/<triple>/package.json, into the root
+// optionalDependencies and into Cargo.toml, so every package and the crate match.
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,4 +21,9 @@ for (const dir of readdirSync(join(rootDir, 'npm'), { withFileTypes: true })) {
   }
 }
 writeFileSync(rootPath, JSON.stringify(root, null, 2) + '\n');
+
+// The Rust crate follows the same version (the first `version =` line is the [package] one).
+const cargoPath = join(rootDir, 'Cargo.toml');
+const cargo = readFileSync(cargoPath, 'utf8');
+writeFileSync(cargoPath, cargo.replace(/^version = ".*"$/m, `version = "${version}"`));
 console.log(`[rxpress] Synced platform packages to version ${version}`);

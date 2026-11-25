@@ -1,5 +1,9 @@
 # rxpress
 
+[![CI](https://github.com/denerFernandes/rxpress/actions/workflows/ci.yml/badge.svg)](https://github.com/denerFernandes/rxpress/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@rxpress/rxpress)](https://www.npmjs.com/package/@rxpress/rxpress)
+[![License: MIT](https://img.shields.io/npm/l/@rxpress/rxpress)](LICENSE)
+
 HTTP/HTTPS server for Node.js with the networking engine written in Rust (N-API), compatible with **Express 5**: same API, `async` handlers, and third-party middleware such as `cors`, `helmet` and `morgan`.
 
 ## Why rxpress
@@ -301,6 +305,13 @@ npm run test:express # Express 5.3.0's own test suite against rxpress
 npm run bench        # Benchmark against Express 5 with wrk
 npm run bench:resources # Memory and CPU against Express 5 (RUNS=5 for a median)
 ```
+
+## Project status and support
+
+- **Version `0.x`:** the API is Express 5's, but the project is young. A minor version (`0.2.0`) may change behaviour; patch versions only fix bugs. Every change is in [CHANGELOG.md](CHANGELOG.md), and releases are published to npm with provenance, built by the [release workflow](.github/workflows/release.yml).
+- **Platforms:** Node.js 22 and newer. Prebuilt binaries exist for Linux (glibc and musl, x64 and arm64), macOS (Apple Silicon and Intel) and Windows x64. CI runs the unit tests, the end-to-end tests and Express 5's own test suite on Linux x64, macOS (Apple Silicon) and Windows x64; the other targets are built by every release but not tested by CI.
+- **Only the latest `0.x` receives fixes**, including security fixes. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md); do not open a public issue.
+- **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Bug reports and compatibility gaps with Express 5 are welcome as issues.
 
 ## License
 

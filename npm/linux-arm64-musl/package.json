@@ -22,5 +22,13 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/denerFernandes/rxpress.git"
+  },
+  "homepage": "https://github.com/denerFernandes/rxpress#readme",
+  "bugs": {
+    "url": "https://github.com/denerFernandes/rxpress/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

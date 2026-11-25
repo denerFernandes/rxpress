@@ -1,8 +1,13 @@
 [package]
 name = "rxpress-native"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
-description = "Ultra-fast Express-compatible HTTP/HTTPS engine for Node.js written in Rust"
+description = "Rust HTTP/HTTPS engine behind rxpress, an Express 5 compatible server for Node.js"
+license = "MIT"
+repository = "https://github.com/denerFernandes/rxpress"
+readme = "README.md"
+# Built as a Node addon and published to npm; never published to crates.io.
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
