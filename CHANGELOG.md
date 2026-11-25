@@ -17,7 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Native `express.static()`, `express.json()`, `express.urlencoded()`, `express.text()` and `express.raw()` implemented in Rust.
 - Prebuilt binaries per platform (`rxpress-<target>` as `optionalDependencies`): darwin arm64/x64, linux x64/arm64 (glibc and musl), win32 x64.
 - CI (GitHub Actions) and a release workflow with npm provenance.
-- `npm run test:express`: runs Express's own test suite against rxpress (also in CI); tests that still fail are listed in `test/express-suite/known-failures.json`.
+- `npm run test:express`: runs Express's own test suite against rxpress (also in CI): 1260 of 1261 tests pass; the remaining one (a `sendFile` client-abort timing case) is listed in `test/express-suite/known-failures.json` and explained in the README.
 - Every method in `http.METHODS` on `app`, `Router` and `Route` (`app.acl()`, `router.propfind()`, `route['m-search']()`...), as in Express.
 - `npm run bench:soak`: long-running mixed-traffic soak test that tracks RSS, heap and open descriptors.
 - `express.Router()` returns a callable router (`router(req, res, next)`), as in Express; `router.handle()` works with plain request objects (FQDN URLs, blank or missing URL, lowercase methods).
@@ -39,6 +39,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - `Content-Disposition` follows `content-disposition` 2: `filename` is unquoted when it is a token; a `Content-Disposition` in `res.download()`'s `headers` option is ignored; `res.attachment('')` sends `filename=""`.
 - `res.sendFile()` with `root` normalizes the path first (`a/../b` is allowed when it stays inside the root), and a non-string path throws `path must be a string to res.sendFile`.
 - `res.get()` returns arrays as set (it is `res.getHeader()` in Express); `res.vary()` follows the `vary` package (arrays, `*`, invalid names throw).
+- `app.set()` follows Express: `etag` and `query parser` reject unknown values and keep `etag fn`/`query parser fn` in sync, `app.set(name)` reads inherited settings, and a mounted app inherits `trust proxy`, settings and engines from its parent (through the prototype chain, as in Express).
+- `express.json()`, `express.urlencoded()`, `express.text()`, `express.raw()` and `express.static()` report the same `.length` as Express; `cookie-parser` mounted after rxpress has parsed cookies still runs (it sees no `req.cookies` yet).
+- `res.cookie()` treats `maxAge: null` as unset; the `json escape` setting escapes `<`, `>` and `&` in `res.json()`/`res.jsonp()`.
+- A `Transfer-Encoding` set from JS is honoured like Node: a last coding of `chunked` is sent chunked, any other coding is sent close-delimited with `Connection: close`; never with `Content-Length`.
+- `req.get()` throws on a missing or non-string name; `req.subdomains` returns the whole IP with `subdomain offset` 0; `req.protocol` reads `req.socket.encrypted`; `req.fresh` ignores `If-Modified-Since` when `If-None-Match` is present (fresh 2).
+- `express.static()` follows serve-static and send: `..` segments that stay inside the root are allowed, `If-Match`/`If-Unmodified-Since` give 412, `acceptRanges`/`cacheControl: false`, `extensions` as a string, `maxAge` capped at one year, an encoded redirect `Location`, and errors passed to `next()` as `BadRequestError`/`ForbiddenError`/`NotFoundError` (or the underlying `ENOENT`/`ENAMETOOLONG`) when `fallthrough` is false. The engine still serves hits itself and hands misses, refusals and precondition requests to the JS handler.
+- `res.links()` accepts an array of URLs per rel; an OPTIONS request is answered by the router that matched it, and an error while answering (e.g. headers already sent) goes to the app's error handlers, as in router@2.
+- `res.setHeader()` throws `ERR_HTTP_HEADERS_SENT` after `res.writeHead()`, as in Node.
+- `app.listen()` passes a server error (`EADDRINUSE`...) to its callback, as in Express 5; without a callback it is still thrown.
+- `res.sendFile()` supports `send`'s `start`/`end` options and reports `ECONNABORTED` when the client already went away.
+- Node's own `OutgoingMessage.prototype.setHeader/getHeader/removeHeader` work on rxpress responses (the `cookies` package calls them, so `cookie-session` now sets its cookie).
+- `app.request`/`app.response` are per app and inherit from the parent app's, as in Express (extending one no longer changes every app). The prototype switch only happens once an app has touched them.
 - The main package no longer ships `native/`; the binary comes from the platform package (a local `native/rxpress.node` still takes precedence during development).
 
 ### Fixed
@@ -50,7 +62,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Security
 
 - ReDoS in routes with several parameters in one segment (`/:a-:b-:c`): the route compiler now follows path-to-regexp 8.
-- A `Transfer-Encoding` header set from JS is no longer sent together with `Content-Length` (fast path, 304 and `sendFile`); a wrong `Content-Length` is corrected.
+- A `Transfer-Encoding` header set from JS is never sent together with `Content-Length` (the body is framed by the engine), and none is sent on 304; a wrong `Content-Length` is corrected.
 - Bounded memory for pipelined static cache hits (flush every 256 KiB) and a new write timeout, `writeTimeoutMs` (30 s), against slow readers.
 - A `Range` header with non-ASCII bytes no longer panics; tiny body chunks are coalesced.
 - HTTP parser aligned with Node's llhttp: only methods from `http.METHODS`, valid request-target, strict chunk-size line.

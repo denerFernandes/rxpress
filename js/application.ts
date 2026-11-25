@@ -6,7 +6,19 @@ import { View, type ViewEngine } from './view.js';
 import { type EventListenerFn, RxRequest } from './request.js';
 import { RxResponse } from './response.js';
 import { EXTRA_METHODS, Router, splitUseArgs, type Route } from './router.js';
-import { parseTrustProxy, type TrustProxyFn } from './security.js';
+import { parseQueryString, parseTrustProxy, type TrustProxyFn } from './security.js';
+import { computeEtag } from './response-send.js';
+
+type EtagFn = (body: string | Buffer, encoding?: string) => string;
+
+/** Express `compileETag`: the function behind the `etag` setting (`etag fn`). */
+function compileEtag(val: unknown): EtagFn | undefined {
+  if (typeof val === 'function') return val as EtagFn;
+  if (val === true || val === 'weak') return (body) => computeEtag(body, true);
+  if (val === 'strong') return (body) => computeEtag(body, false);
+  if (val === false) return undefined;
+  throw new TypeError(`unknown value for etag function: ${String(val)}`);
+}
 import type {
   AddressInfo,
   ErrorRequestHandler,
@@ -19,6 +31,10 @@ import type {
   TlsOptions,
 } from './types.js';
 import { startServer } from './server/lifecycle.js';
+import { appProtos, enterApp } from './app-protos.js';
+
+/** `app.listen()` callback: called once listening, or with the server error (EADDRINUSE...). */
+export type ListenCallback = (err?: Error) => void;
 
 export { addUpgradeTarget } from './server/upgrade.js';
 
@@ -57,10 +73,14 @@ export class Application {
   public _trustProxy = false;
   /** @internal */
   public _trustProxyFn: TrustProxyFn | null = null;
+  /** @internal `trust proxy` still holds the default (a mounted app then inherits it). */
+  public _trustProxyDefault = true;
   /** @internal */
   public _jsonReplacer: ((key: string, value: unknown) => unknown) | undefined = undefined;
   /** @internal */
   public _jsonSpaces: string | number | undefined = undefined;
+  /** @internal `json escape` setting. */
+  public _jsonEscape = false;
   /** @internal */
   public _queryParserMode: 'extended' | 'simple' | false = 'simple';
   /** @internal */
@@ -71,14 +91,40 @@ export class Application {
     this.defaultConfiguration();
   }
 
-  /** The request prototype (`app.request` in Express). */
+  /** @internal This app's own request prototype, created when `app.request` is first used. */
+  public _ownRequest: object | null = null;
+  /** @internal This app's own response prototype, created when `app.response` is first used. */
+  public _ownResponse: object | null = null;
+
+  /**
+   * The request prototype of this app (`app.request` in Express): inherits from the parent app's
+   * (or `express.request`), so extending it affects only this app and the apps mounted under it.
+   */
   get request(): RxRequest {
-    return RxRequest.prototype;
+    if (this._ownRequest === null) {
+      this._ownRequest = Object.create(this.parent ? this.parent.request : RxRequest.prototype);
+      appProtos.active++;
+    }
+    return this._ownRequest as RxRequest;
   }
 
-  /** The response prototype (`app.response` in Express). */
+  set request(proto: RxRequest) {
+    if (this._ownRequest === null) appProtos.active++;
+    this._ownRequest = proto;
+  }
+
+  /** The response prototype of this app (`app.response` in Express); see `app.request`. */
   get response(): RxResponse {
-    return RxResponse.prototype;
+    if (this._ownResponse === null) {
+      this._ownResponse = Object.create(this.parent ? this.parent.response : RxResponse.prototype);
+      appProtos.active++;
+    }
+    return this._ownResponse as RxResponse;
+  }
+
+  set response(proto: RxResponse) {
+    if (this._ownResponse === null) appProtos.active++;
+    this._ownResponse = proto;
   }
 
   /** @internal */
@@ -96,6 +142,7 @@ export class Application {
     this.set('view', View);
     this.set('views', resolvePath('views'));
     if (env === 'production') this.enable('view cache');
+    this._trustProxyDefault = true;
     this.locals.settings = this.settings;
   }
 
@@ -224,12 +271,9 @@ export class Application {
     if (req instanceof RxRequest) {
       const rxRes = res as RxResponse;
       const prevApp = req.app;
-      const prevResApp = rxRes.app;
-      req.app = this;
-      rxRes.app = this;
+      enterApp(req, rxRes, this);
       this._router.handle(req, rxRes, (err?: unknown) => {
-        req.app = prevApp;
-        rxRes.app = prevResApp;
+        enterApp(req, rxRes, prevApp);
         if (callback) {
           callback(err);
         } else if (!rxRes.headersSent) {
@@ -267,17 +311,26 @@ export class Application {
 
   // ---- Express Settings API ----
 
-  public set(setting: string, val: unknown): this {
+  public set(setting: string): unknown;
+  public set(setting: string, val: unknown): this;
+  public set(setting: string, val?: unknown): unknown {
+    // Express: one argument reads the setting (own or inherited from a parent app).
+    if (arguments.length === 1) return this.settings[setting];
     this.settings[setting] = val;
-    if (setting === 'x-powered-by') {
+    if (setting === 'etag') {
+      this.settings['etag fn'] = compileEtag(val);
+    } else if (setting === 'x-powered-by') {
       this._xPoweredBy = Boolean(val);
     } else if (setting === 'trust proxy') {
       this._trustProxyFn = parseTrustProxy(val);
       this._trustProxy = Boolean(this._trustProxyFn);
       this.settings['trust proxy fn'] = this._trustProxyFn;
+      this._trustProxyDefault = false;
     } else if (setting === 'json replacer') {
       this._jsonReplacer =
         typeof val === 'function' ? (val as (k: string, v: unknown) => unknown) : undefined;
+    } else if (setting === 'json escape') {
+      this._jsonEscape = Boolean(val);
     } else if (setting === 'json spaces') {
       this._jsonSpaces =
         typeof val === 'number' || typeof val === 'string' ? val : undefined;
@@ -286,10 +339,26 @@ export class Application {
     } else if (setting === 'strict routing') {
       this._router._options.strict = Boolean(val);
     } else if (setting === 'query parser') {
+      if (
+        typeof val !== 'function' &&
+        val !== true &&
+        val !== false &&
+        val !== 'simple' &&
+        val !== 'extended'
+      ) {
+        throw new TypeError(`unknown value for query parser function: ${String(val)}`);
+      }
+      this.settings['query parser fn'] =
+        typeof val === 'function'
+          ? val
+          : val === false
+            ? undefined
+            : val === 'extended'
+              ? (str: string) => parseQueryString(str, { mode: 'extended' })
+              : (str: string) => parseQueryString(str, { mode: 'simple' });
       if (typeof val === 'function') {
         this._queryParserFn = val as (qs: string) => Record<string, unknown>;
         this._queryParserMode = 'extended';
-        this.settings['query parser fn'] = val;
       } else if (val === 'simple' || val === true) {
         this._queryParserFn = undefined;
         this._queryParserMode = 'simple';
@@ -302,6 +371,25 @@ export class Application {
       }
     }
     return this;
+  }
+
+  /**
+   * @internal Express's own 'mount' step: settings and engines fall back to the parent's, and
+   * a `trust proxy` the sub-app never set comes from the parent.
+   */
+  public _inheritFrom(parent: Application): void {
+    if (this._trustProxyDefault && typeof parent.settings['trust proxy fn'] === 'function') {
+      delete this.settings['trust proxy'];
+      delete this.settings['trust proxy fn'];
+      this._trustProxyFn = parent._trustProxyFn;
+      this._trustProxy = parent._trustProxy;
+    }
+    Object.setPrototypeOf(this.settings, parent.settings);
+    Object.setPrototypeOf(this.engines, parent.engines);
+    // An app that already has its own prototypes now inherits the parent's (Express does this
+    // for every sub-app; the others pick the parent's up through `parent` when they need it).
+    if (this._ownRequest !== null) Object.setPrototypeOf(this._ownRequest, parent.request);
+    if (this._ownResponse !== null) Object.setPrototypeOf(this._ownResponse, parent.response);
   }
 
   public enable(setting: string): this {
@@ -348,6 +436,7 @@ export class Application {
       if (isRxApp(h)) {
         const subApp = h as unknown as Application;
         subApp.parent = this;
+        subApp._inheritFrom(this);
         subApp.emit('mount', this);
       }
     }
@@ -429,19 +518,19 @@ export class Application {
 
   // ---- Server Lifecycle (HTTP & HTTPS/TLS) ----
 
-  public listen(cb?: () => void): ServerHandle;
-  public listen(port: number, cb?: () => void): ServerHandle;
-  public listen(port: number, host: string, cb?: () => void): ServerHandle;
-  public listen(port: number, host: string, backlog: number, cb?: () => void): ServerHandle;
+  public listen(cb?: ListenCallback): ServerHandle;
+  public listen(port: number, cb?: ListenCallback): ServerHandle;
+  public listen(port: number, host: string, cb?: ListenCallback): ServerHandle;
+  public listen(port: number, host: string, backlog: number, cb?: ListenCallback): ServerHandle;
   public listen(
-    portOrCb?: number | (() => void),
-    hostOrCb?: string | (() => void),
-    backlogOrCb?: number | (() => void),
-    maybeCb?: () => void
+    portOrCb?: number | ListenCallback,
+    hostOrCb?: string | ListenCallback,
+    backlogOrCb?: number | ListenCallback,
+    maybeCb?: ListenCallback
   ): ServerHandle {
     let port = 0;
     let host = '0.0.0.0';
-    let cb: (() => void) | undefined;
+    let cb: ListenCallback | undefined;
 
     if (portOrCb === undefined || typeof portOrCb === 'function') {
       port = 0;
@@ -463,22 +552,22 @@ export class Application {
     return this._startServer(host, port, undefined, cb);
   }
 
-  public listenTls(tlsOptions: TlsOptions, cb?: () => void): ServerHandle;
+  public listenTls(tlsOptions: TlsOptions, cb?: ListenCallback): ServerHandle;
   public listenTls(
     tlsOptions: TlsOptions,
     port: number,
-    hostOrCb?: string | (() => void),
-    maybeCb?: () => void
+    hostOrCb?: string | ListenCallback,
+    maybeCb?: ListenCallback
   ): ServerHandle;
   public listenTls(
     tlsOptions: TlsOptions,
-    portOrCb?: number | (() => void),
-    hostOrCb?: string | (() => void),
-    maybeCb?: () => void
+    portOrCb?: number | ListenCallback,
+    hostOrCb?: string | ListenCallback,
+    maybeCb?: ListenCallback
   ): ServerHandle {
     let port = 0;
     let host = '0.0.0.0';
-    let cb: (() => void) | undefined;
+    let cb: ListenCallback | undefined;
 
     if (portOrCb === undefined || typeof portOrCb === 'function') {
       port = 0;
@@ -503,7 +592,7 @@ export class Application {
     host: string,
     port: number,
     tlsOptions?: TlsOptions,
-    callback?: () => void,
+    callback?: ListenCallback,
     bridgeMode = false
   ): ServerHandle {
     const handle = startServer(this, {
@@ -584,3 +673,6 @@ export function createHttpsServer(tlsOptions: TlsOptions, app: Application): Htt
     },
   };
 }
+
+appProtos.baseRequest = RxRequest.prototype;
+appProtos.baseResponse = RxResponse.prototype;

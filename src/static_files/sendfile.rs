@@ -17,6 +17,8 @@ pub struct SendFileRequest<'a> {
     pub max_age_secs: u64,
     pub dotfiles: DotfilesPolicy,
     pub enable_etag: bool,
+    /// `send`'s `start`/`end` options as `(offset, len)`: the part of the file served.
+    pub window: Option<(u64, u64)>,
 }
 
 /// Open for reading without blocking on special files: a FIFO (named pipe) planted under a static
@@ -51,6 +53,7 @@ pub fn decode_sendfile_payload<'a>(
             max_age_secs: 0,
             dotfiles: DotfilesPolicy::Ignore,
             enable_etag: config_etag_enabled && !suppress_etag,
+            window: None,
         });
     }
 
@@ -60,6 +63,7 @@ pub fn decode_sendfile_payload<'a>(
     // [5..9]: filePathLen (u32 LE)
     // [9..9+N]: filePath (UTF-8)
     // if hasRoot: u32 LE rootLen + rootBytes (UTF-8)
+    // optional: u64 LE offset + u64 LE len (`start`/`end`)
     if body.len() < 9 {
         return None;
     }
@@ -85,7 +89,16 @@ pub fn decode_sendfile_payload<'a>(
             return None;
         }
         let r = std::str::from_utf8(&body[pos..pos + rlen]).ok()?;
+        pos += rlen;
         Some(r)
+    } else {
+        None
+    };
+
+    let window = if body.len().saturating_sub(pos) >= 16 {
+        let off = u64::from_le_bytes(body[pos..pos + 8].try_into().ok()?);
+        let len = u64::from_le_bytes(body[pos + 8..pos + 16].try_into().ok()?);
+        Some((off, len))
     } else {
         None
     };
@@ -107,6 +120,7 @@ pub fn decode_sendfile_payload<'a>(
         max_age_secs,
         dotfiles,
         enable_etag: config_etag_enabled && !suppress_etag && meta_etag,
+        window,
     })
 }
 
@@ -229,6 +243,7 @@ pub async fn serve_sendfile<W: AsyncWrite + Unpin>(
         req.cache_control,
         req.max_age_secs,
         req.immutable,
+        req.window,
         x_powered_by,
         close_conn,
     )
@@ -303,6 +318,39 @@ mod tests {
     use super::*;
     use crate::static_files::test_util::make_temp_dir;
 
+    fn meta(opts: u8, path: &str, root: Option<&str>, window: Option<(u64, u64)>) -> Vec<u8> {
+        let mut b = vec![opts];
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&(path.len() as u32).to_le_bytes());
+        b.extend_from_slice(path.as_bytes());
+        if let Some(r) = root {
+            b.extend_from_slice(&(r.len() as u32).to_le_bytes());
+            b.extend_from_slice(r.as_bytes());
+        }
+        if let Some((off, len)) = window {
+            b.extend_from_slice(&off.to_le_bytes());
+            b.extend_from_slice(&len.to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn decodes_root_and_optional_start_end_window() {
+        let long_root = "/a/root/path/longer/than/sixteen/bytes";
+        let m = meta(0x10, "name.txt", Some(long_root), None);
+        let r = decode_sendfile_payload(&m, true, true, false).unwrap();
+        assert_eq!(r.root, Some(long_root));
+        assert_eq!(r.window, None);
+
+        let m = meta(0x10, "name.txt", Some(long_root), Some((1, 2)));
+        let r = decode_sendfile_payload(&m, true, true, false).unwrap();
+        assert_eq!(r.window, Some((1, 2)));
+
+        let m = meta(0, "/abs/name.txt", None, Some((0, 2)));
+        let r = decode_sendfile_payload(&m, true, true, false).unwrap();
+        assert_eq!((r.root, r.window), (None, Some((0, 2))));
+    }
+
     #[test]
     fn sendfile_payload_decodes_meta_and_legacy() {
         let mut payload = Vec::new();
@@ -364,6 +412,7 @@ mod tests {
                 max_age_secs: 0,
                 dotfiles: DotfilesPolicy::Ignore,
                 enable_etag: true,
+                window: None,
             },
             false,
             None,
@@ -393,6 +442,7 @@ mod tests {
                 max_age_secs: 0,
                 dotfiles: DotfilesPolicy::Deny,
                 enable_etag: true,
+                window: None,
             },
             false,
             None,
@@ -423,6 +473,7 @@ mod tests {
                 max_age_secs: 0,
                 dotfiles: DotfilesPolicy::Ignore,
                 enable_etag: false,
+                window: None,
             },
             false,
             None,

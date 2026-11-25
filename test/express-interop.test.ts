@@ -256,6 +256,51 @@ describe('req as a Readable', () => {
   });
 });
 
+describe("Node's OutgoingMessage header methods called on res (cookies / cookie-session)", () => {
+  it('setHeader/getHeader/removeHeader from http.OutgoingMessage.prototype act on res', async () => {
+    const { OutgoingMessage } = require('node:http') as typeof import('node:http');
+    const app = rxpress();
+    app.get('/h', (_req, res) => {
+      OutgoingMessage.prototype.setHeader.call(res, 'Set-Cookie', ['a=1', 'b=2']);
+      OutgoingMessage.prototype.setHeader.call(res, 'X-Gone', 'x');
+      OutgoingMessage.prototype.removeHeader.call(res, 'x-gone');
+      const seen = OutgoingMessage.prototype.getHeader.call(res, 'set-cookie');
+      res.json({ seen, own: res.getHeader('set-cookie'), gone: res.getHeader('x-gone') ?? null });
+    });
+    const base = await listen(app);
+    const r = await fetch(base + '/h');
+    expect(r.headers.getSetCookie()).toEqual(['a=1', 'b=2']);
+    expect(r.headers.get('x-gone')).toBeNull();
+    expect(await r.json()).toEqual({ seen: ['a=1', 'b=2'], own: ['a=1', 'b=2'], gone: null });
+  });
+});
+
+describe('app.request / app.response are per app', () => {
+  it('extend only their app and the apps mounted under it', async () => {
+    const parent = rxpress();
+    const child = rxpress();
+    const other = rxpress();
+    (parent.request as unknown as { who(): string }).who = () => 'parent';
+    (child.request as unknown as { who(): string }).who = () => 'child';
+    (parent.response as unknown as { tag(): string }).tag = () => 'p';
+    const who = (req: unknown) => {
+      const r = req as { who?: () => string };
+      return typeof r.who === 'function' ? r.who() : 'none';
+    };
+    child.get('/', (req, res) => {
+      res.send(who(req) + ':' + (res as unknown as { tag(): string }).tag());
+    });
+    parent.use('/child', child);
+    parent.get('/', (req, res) => res.send(who(req)));
+    other.get('/', (req, res) => res.send(who(req)));
+    const base = await listen(parent);
+    const otherBase = await listen(other);
+    expect(await (await fetch(base + '/')).text()).toBe('parent');
+    expect(await (await fetch(base + '/child/')).text()).toBe('child:p');
+    expect(await (await fetch(otherBase + '/')).text()).toBe('none');
+  });
+});
+
 describe('req.socket / res.socket', () => {
   it('is a shared EventEmitter with the net.Socket basics', async () => {
     const app = rxpress();

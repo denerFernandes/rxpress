@@ -62,7 +62,7 @@ pub(super) async fn write_buffered_response<W: AsyncWrite + Unpin>(
     cond: CondHeaders<'_>,
     no_cache: bool,
     close_conn: bool,
-) -> std::io::Result<()> {
+) -> std::io::Result<bool> {
     let suppress_xpb = (flags & RESP_FLAG_SUPPRESS_POWERED_BY) != 0;
     let suppress_etag = (flags & RESP_FLAG_SUPPRESS_ETAG) != 0;
     let is_head = method == MethodCode::Head;
@@ -74,7 +74,8 @@ pub(super) async fn write_buffered_response<W: AsyncWrite + Unpin>(
         return Box::pin(write_file_response(
             writer, write_buf, status, flags, headers, body, is_head, config, cond, close_conn,
         ))
-        .await;
+        .await
+        .map(|()| false);
     }
 
     if !is_valid_status(status)
@@ -82,7 +83,9 @@ pub(super) async fn write_buffered_response<W: AsyncWrite + Unpin>(
             .iter()
             .any(|(k, v)| !is_valid_response_header(k.as_bytes(), v.as_bytes()))
     {
-        return write_error_close(writer, write_buf, 500, xpb).await;
+        return write_error_close(writer, write_buf, 500, xpb)
+            .await
+            .map(|()| true);
     }
 
     // Express `res.send`: ETag for any status and method, then `req.fresh` -> 304.
@@ -108,7 +111,7 @@ pub(super) async fn write_buffered_response<W: AsyncWrite + Unpin>(
         }
     }
 
-    let no_body_status = append_buffered_head(
+    let framing = append_buffered_head(
         write_buf,
         status,
         ct_code,
@@ -121,11 +124,59 @@ pub(super) async fn write_buffered_response<W: AsyncWrite + Unpin>(
         send_mode,
     );
 
-    if !is_head && !no_body_status && !(send_mode && status == 205) && !body.is_empty() {
-        write_buf.extend_from_slice(body);
+    let has_body = !is_head && framing != Framing::NoBody && !(send_mode && status == 205);
+    match framing {
+        Framing::Chunked if has_body => {
+            if !body.is_empty() {
+                let mut hex = [0u8; 16];
+                write_buf.extend_from_slice(hex_len(body.len(), &mut hex));
+                write_buf.extend_from_slice(b"\r\n");
+                write_buf.extend_from_slice(body);
+                write_buf.extend_from_slice(b"\r\n");
+            }
+            write_buf.extend_from_slice(b"0\r\n\r\n");
+        }
+        _ if has_body && !body.is_empty() => write_buf.extend_from_slice(body),
+        _ => {}
     }
 
-    writer.write_all(write_buf).await
+    writer.write_all(write_buf).await?;
+    Ok(framing == Framing::CloseDelimited)
+}
+
+/// How the body of a buffered response is delimited on the wire.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Framing {
+    /// The status forbids a body (1xx, 204, 304).
+    NoBody,
+    ContentLength,
+    /// The app set `Transfer-Encoding: ...chunked` (as Node, the engine frames the body).
+    Chunked,
+    /// The app set a `Transfer-Encoding` without `chunked`: the body ends when the connection
+    /// closes (RFC 9112 6.3), so the engine closes it after the response.
+    CloseDelimited,
+}
+
+fn hex_len(n: usize, buf: &mut [u8; 16]) -> &[u8] {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut i = buf.len();
+    let mut v = n;
+    loop {
+        i -= 1;
+        buf[i] = HEX[v & 0xf];
+        v >>= 4;
+        if v == 0 {
+            break;
+        }
+    }
+    &buf[i..]
+}
+
+/// `Transfer-Encoding` the app set (last value), unless it is empty.
+fn js_transfer_encoding(headers: &[(String, String)]) -> Option<&str> {
+    header_value(headers, "transfer-encoding")
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
 }
 
 /// `res.sendFile` / `res.download`: the body carries the encoded file request.
@@ -240,8 +291,8 @@ fn content_type_line(ct_code: u8) -> Option<&'static [u8]> {
     }
 }
 
-/// Status line and headers of a buffered response (into a cleared `write_buf`). Returns
-/// whether the status forbids a body.
+/// Status line and headers of a buffered response (into a cleared `write_buf`). Returns how
+/// the body is framed.
 #[allow(clippy::too_many_arguments)]
 fn append_buffered_head(
     write_buf: &mut Vec<u8>,
@@ -254,7 +305,7 @@ fn append_buffered_head(
     computed_etag: Option<&str>,
     close_conn: bool,
     send_mode: bool,
-) -> bool {
+) -> Framing {
     write_buf.clear();
     let mut nb = itoa::Buffer::new();
     let reason = reason_for(status, headers);
@@ -289,6 +340,27 @@ fn append_buffered_head(
     let strip_entity = send_mode && (status == 204 || status == 304);
     let reset_content = send_mode && status == 205;
 
+    // A Transfer-Encoding set by the app is honoured like Node does (never together with a
+    // Content-Length): `chunked` last means chunked framing, anything else a close-delimited body.
+    let te = if no_body_status || reset_content {
+        None
+    } else {
+        js_transfer_encoding(headers)
+    };
+    let framing = match te {
+        _ if no_body_status => Framing::NoBody,
+        Some(v)
+            if v.rsplit(',')
+                .next()
+                .is_some_and(|last| last.trim().eq_ignore_ascii_case("chunked")) =>
+        {
+            Framing::Chunked
+        }
+        Some(_) => Framing::CloseDelimited,
+        None => Framing::ContentLength,
+    };
+    let keep_js_cl = keep_js_cl && te.is_none();
+
     let mut has_ct = false;
     if !strip_entity {
         if let Some(line) = content_type_line(ct_code) {
@@ -320,11 +392,16 @@ fn append_buffered_head(
             }
             has_cl = true;
         } else if k.eq_ignore_ascii_case("transfer-encoding") {
-            // Buffered bodies are always sent with Content-Length; never emit both (RFC 9112 6.1).
-            continue;
+            // Only the last value, and only when it frames this body (see `framing`).
+            if te.is_none() || !std::ptr::eq(v.as_str(), header_value(headers, k).unwrap_or("")) {
+                continue;
+            }
         } else if k.eq_ignore_ascii_case("x-powered-by") {
             has_xpb = true;
         } else if k.eq_ignore_ascii_case("connection") {
+            if framing == Framing::CloseDelimited {
+                continue;
+            }
             has_conn = true;
         }
         write_buf.extend_from_slice(k.as_bytes());
@@ -343,13 +420,15 @@ fn append_buffered_head(
         write_buf.extend_from_slice(b"\r\n");
     }
 
-    if !has_conn {
+    if framing == Framing::CloseDelimited {
+        write_buf.extend_from_slice(b"Connection: close\r\n");
+    } else if !has_conn {
         push_connection_header(write_buf, close_conn);
     }
 
     if reset_content {
         write_buf.extend_from_slice(b"Content-Length: 0\r\n");
-    } else if !has_cl && !no_body_status {
+    } else if !has_cl && framing == Framing::ContentLength {
         write_buf.extend_from_slice(b"Content-Length: ");
         write_buf.extend_from_slice(nb.format(body.len()).as_bytes());
         write_buf.extend_from_slice(b"\r\n");
@@ -357,7 +436,7 @@ fn append_buffered_head(
 
     write_date_header(write_buf);
     write_buf.extend_from_slice(b"\r\n");
-    no_body_status
+    framing
 }
 
 #[cfg(test)]
@@ -401,11 +480,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn buffered_and_304_never_forward_js_transfer_encoding_and_fix_content_length() {
-        let te = [("Transfer-Encoding", "chunked")];
+    async fn buffered_frames_js_transfer_encoding_and_fixes_content_length() {
+        // A JS `Transfer-Encoding: chunked` is honoured like Node: the engine frames the body
+        // (a body that looks like a chunk terminator cannot end the message early), and no
+        // Content-Length goes with it, even one set from JS.
+        let te = [("Transfer-Encoding", "chunked"), ("Content-Length", "5")];
         let s = buffered_to_string(404, &te, b"0\r\n\r\n", MethodCode::Get, None).await;
-        assert!(!s.contains("transfer-encoding"), "{s}");
-        assert!(s.contains("content-length: 5\r\n"), "{s}");
+        assert!(s.contains("transfer-encoding: chunked\r\n"), "{s}");
+        assert!(!s.contains("content-length"), "{s}");
+        assert!(s.ends_with("\r\n\r\n5\r\n0\r\n\r\n\r\n0\r\n\r\n"), "{s}");
+
+        // Any other coding: no length at all, so the body is close-delimited.
+        let gz = [("Transfer-Encoding", "gzip")];
+        let s = buffered_to_string(200, &gz, b"hello", MethodCode::Get, None).await;
+        assert!(s.contains("transfer-encoding: gzip\r\n"), "{s}");
+        assert!(s.contains("connection: close\r\n"), "{s}");
+        assert!(
+            !s.contains("content-length") && s.ends_with("\r\n\r\nhello"),
+            "{s}"
+        );
 
         // ETag 304 branch: same rule.
         let etag = compute_etag(b"hello", true);

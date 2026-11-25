@@ -4,6 +4,7 @@
  * getters / methods as its own prototype members (so `express.request` extension and the d.ts
  * stay the same) and delegates here. Nothing is allocated unless a property is read.
  */
+import { isIP } from 'node:net';
 import type { RxRequest } from './request.js';
 import {
   MIME_RE,
@@ -21,14 +22,16 @@ import {
 
 /** @internal `req.protocol`: honours `X-Forwarded-Proto` from a trusted proxy. */
 export function protocolOf(req: RxRequest): string {
+  const sock = req._peekSocket();
+  const proto = (sock !== null ? sock.encrypted : req._isTls) ? 'https' : 'http';
   const trustFn = req.app._trustProxyFn;
   if (trustFn && trustFn(req._getRemoteAddr(), 0)) {
-    const proto = req.get('x-forwarded-proto');
-    if (proto) {
-      return proto.split(',')[0].trim().toLowerCase();
+    const fwd = req.get('x-forwarded-proto');
+    if (fwd) {
+      return fwd.split(',')[0].trim().toLowerCase();
     }
   }
-  return req._isTls ? 'https' : 'http';
+  return proto;
 }
 
 /** @internal */
@@ -70,9 +73,8 @@ export function hostnameOf(req: RxRequest): string | undefined {
 export function subdomainsOf(req: RxRequest): string[] {
   const hostname = req.hostname;
   if (!hostname) return [];
-  if (/^[\d.:[\]]+$/.test(hostname)) return [];
   const offset = Number(req.app.get('subdomain offset') ?? 2);
-  const parts = hostname.split('.').reverse();
+  const parts = isIP(hostname) ? [hostname] : hostname.split('.').reverse();
   return parts.slice(offset);
 }
 

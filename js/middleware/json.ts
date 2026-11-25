@@ -17,7 +17,8 @@ import {
 /**
  * Express-compatible `express.json(options)` backed by Rust body ingestion & limit enforcement.
  */
-export function json(options: JsonOptions = {}): RequestHandler {
+export function json(opts?: JsonOptions): RequestHandler {
+  const options: JsonOptions = opts ?? {};
   const limit = parseSizeLimit(options.limit, 100 * 1024);
   const strict = options.strict !== false;
   const inflate = options.inflate !== false;

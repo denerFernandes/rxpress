@@ -76,7 +76,7 @@ export interface StartOptions {
   host: string;
   port: number;
   tlsOptions: TlsOptions | undefined;
-  callback: (() => void) | undefined;
+  callback: ((err?: Error) => void) | undefined;
   bridgeMode: boolean;
   /** Whether `handle` is still the app's current server (app-level 'listening'/'close'). */
   isCurrent: (handle: ServerHandle) => boolean;
@@ -110,7 +110,15 @@ export function startServer(app: Application, opts: StartOptions): ServerHandle 
     if (err instanceof Error && /address already in use|EADDRINUSE/i.test(err.message)) {
       (err as NodeJS.ErrnoException).code = 'EADDRINUSE';
     }
-    throw err;
+    // Express 5 hands server errors to the listen callback (`server.once('error', cb)`);
+    // without one the error is thrown here.
+    if (!callback || !(err instanceof Error)) throw err;
+    const failed = failedServerHandle();
+    queueMicrotask(() => {
+      if (failed.listenerCount('error') > 0) failed.emit('error', err);
+      callback(err);
+    });
+    return failed;
   }
 
   const handle = createServerHandle(app, runtime, nativeCfg, addrInfo, opts);
@@ -128,6 +136,41 @@ export function startServer(app: Application, opts: StartOptions): ServerHandle 
     }
   });
 
+  return handle;
+}
+
+/** The handle `listen()` returns when the engine could not bind (like a Node server that failed). */
+function failedServerHandle(): ServerHandle {
+  const emitter = new EventEmitter();
+  const handle: ServerHandle = Object.assign(emitter, {
+    listening: false,
+    timeout: 0,
+    keepAliveTimeout: 5000,
+    headersTimeout: 60000,
+    requestTimeout: 300000,
+    address(): AddressInfo | null {
+      return null;
+    },
+    async close(cb?: (err?: Error) => void): Promise<void> {
+      const err = Object.assign(new Error('Server is not running.'), {
+        code: 'ERR_SERVER_NOT_RUNNING',
+      });
+      if (cb) cb(err);
+    },
+    closeAllConnections(): void {},
+    closeIdleConnections(): void {},
+    ref(): ServerHandle {
+      return handle;
+    },
+    unref(): ServerHandle {
+      return handle;
+    },
+    setTimeout(msecs?: number, cb?: () => void): ServerHandle {
+      if (typeof msecs === 'number') handle.timeout = msecs;
+      if (cb) handle.on('timeout', cb);
+      return handle;
+    },
+  }) as ServerHandle;
   return handle;
 }
 

@@ -28,10 +28,28 @@ function splitResponses(buf: Buffer): Array<{ head: string; body: Buffer }> {
     const end = buf.indexOf('\r\n\r\n', pos, 'latin1');
     if (end < 0) break;
     const head = buf.subarray(pos, end).toString('latin1');
+    pos = end + 4;
+    if (/\r\ntransfer-encoding:\s*chunked/i.test(head)) {
+      // Decode chunked framing: what a client sees as the body.
+      const parts: Buffer[] = [];
+      for (;;) {
+        const lineEnd = buf.indexOf('\r\n', pos, 'latin1');
+        const size = parseInt(buf.subarray(pos, lineEnd).toString('latin1'), 16);
+        pos = lineEnd + 2;
+        if (size === 0) {
+          pos += 2;
+          break;
+        }
+        parts.push(buf.subarray(pos, pos + size));
+        pos += size + 2;
+      }
+      out.push({ head, body: Buffer.concat(parts) });
+      continue;
+    }
     const m = /\r\ncontent-length:\s*(\d+)/i.exec(head);
     const len = m ? Number(m[1]) : 0;
-    out.push({ head, body: buf.subarray(end + 4, end + 4 + len) });
-    pos = end + 4 + len;
+    out.push({ head, body: buf.subarray(pos, pos + len) });
+    pos += len;
   }
   return out;
 }
@@ -39,7 +57,7 @@ function splitResponses(buf: Buffer): Array<{ head: string; body: Buffer }> {
 const SMUGGLE = '0\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nPOISON';
 
 describe('Engine response framing', () => {
-  itRxpress('drops a JS Transfer-Encoding on the fast path: pipelined responses stay in sync', async () => {
+  itRxpress('frames a JS Transfer-Encoding body itself: pipelined responses stay in sync', async () => {
     const app = createApp();
     app.set('etag', false);
     app.get('/proxy', (_req, res) => {
@@ -57,15 +75,17 @@ describe('Engine response framing', () => {
     );
     await sock.waitForClose(5000);
     const all = sock.getBufferedData();
-    expect(all.toString('latin1').toLowerCase()).not.toContain('transfer-encoding');
     const resps = splitResponses(all);
     expect(resps).toHaveLength(2);
     expect(resps[0].head).toMatch(/^HTTP\/1\.1 404/);
+    // Like Node: the app's Transfer-Encoding is kept, never next to a Content-Length.
+    expect(resps[0].head.toLowerCase()).toContain('transfer-encoding: chunked');
+    expect(resps[0].head.toLowerCase()).not.toContain('content-length');
     expect(resps[0].body.toString('latin1')).toBe(SMUGGLE);
     expect(resps[1].body.toString()).toBe('pong');
   });
 
-  itRxpress('drops a JS Transfer-Encoding on the ETag 304 path', async () => {
+  itRxpress('keeps a JS Transfer-Encoding off a 304, as res.send does', async () => {
     const app = createApp();
     app.get('/r', (_req, res) => {
       res.set('Transfer-Encoding', 'chunked').send('hello');
@@ -74,7 +94,8 @@ describe('Engine response framing', () => {
     cleanups.push(() => srv.close());
     const first = await sendRawHttp(srv.host, srv.port, 'GET /r HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n');
     const etag = String(first.headers.etag);
-    expect(first.headers['transfer-encoding']).toBeUndefined();
+    expect(first.headers['transfer-encoding']).toBe('chunked');
+    expect(first.headers['content-length']).toBeUndefined();
     const second = await sendRawHttp(
       srv.host,
       srv.port,

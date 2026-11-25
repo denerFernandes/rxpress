@@ -93,16 +93,18 @@ export interface RawOptions {
 }
 
 export interface StaticOptions {
+  acceptRanges?: boolean;
+  cacheControl?: boolean;
   dotfiles?: 'allow' | 'deny' | 'ignore';
   etag?: boolean;
-  extensions?: string[] | false;
+  extensions?: string | string[] | false;
   fallthrough?: boolean;
   immutable?: boolean;
   index?: boolean | string | string[];
   lastModified?: boolean;
   maxAge?: number | string;
   redirect?: boolean;
-  setHeaders?: (res: Response, path: string) => void;
+  setHeaders?: (res: Response, path: string, stat: import('node:fs').Stats) => void;
 }
 
 export interface CookieOptions {
@@ -128,6 +130,10 @@ export interface SendFileOptions {
   acceptRanges?: boolean;
   cacheControl?: boolean;
   immutable?: boolean;
+  /** Byte offset to start at (`send`). */
+  start?: number;
+  /** Last byte offset to send, inclusive (`send`). */
+  end?: number;
 }
 
 export interface TlsOptions {
@@ -171,5 +177,7 @@ export interface NativeMiddlewareMeta {
     fallthrough: boolean;
     extensions: string[];
     hasSetHeaders: boolean;
+    /** Options only the JS path implements (`acceptRanges`/`cacheControl: false`). */
+    jsOnly: boolean;
   };
 }

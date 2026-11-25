@@ -189,12 +189,19 @@ When the `app` receives Node's own `req`/`res` (mounted in a real Express app, a
 
 `app.engine()`, `app.set('views' | 'view engine' | 'view cache')`, `app.render()` and `res.render()` work as in Express (including `require('<ext>').__express`, `index.<ext>` in directories and `app.locals`/`res.locals`).
 
+### Express test suite
+
+`npm run test:express` runs Express 5.3.0's own test suite against rxpress (also in CI): 1260 of its 1261 tests pass. The one exception is listed in `test/express-suite/known-failures.json` and below.
+
+`app.request` and `app.response` are per app, as in Express: extending one affects only that app and the apps mounted under it. Express switches the prototype of `req`/`res` as a request enters each app, which slows V8 down, so rxpress only does it once an app has touched `app.request` or `app.response`; apps that extend `express.request`/`express.response` (shared by all apps) or nothing at all pay no cost.
+
 ### Known limitations of the native server
 
 - Extra `'request'`/`'connection'` listeners on the server are not called (for example socket.io's polling transport; the `websocket` transport works).
 - `listen()` on a UNIX socket is not supported.
 - `req.socket.remotePort` is `undefined`.
 - `req`/`res` are not `instanceof http.IncomingMessage`/`ServerResponse`.
+- When a client closes its side of the connection (FIN) while a handler is still running, the engine gives the handler 100 ms to answer before treating the request as aborted; Node aborts at once. A `res.sendFile(path, cb)` that finishes in that window calls `cb()` without the `ECONNABORTED` error Express would pass (this is the Express test that fails). The callback is also called once the file is handed to the engine, not when the last byte is written.
 
 ## Scripts
 
@@ -204,6 +211,7 @@ npm run build:native # Build only the Rust addon -> native/rxpress.node
 npm run build:ts     # Build only the TypeScript layer -> dist/
 npm test             # Unit and compatibility tests
 npm run test:e2e     # End-to-end tests against rxpress and Express 5
+npm run test:express # Express 5.3.0's own test suite against rxpress
 npm run bench        # Benchmark against Express 5 with wrk
 ```
 

@@ -1,18 +1,30 @@
 use super::cache::TL_STATIC_CACHE;
-use super::resolve::resolve_mount_miss_blocking;
-use super::{write_simple_status, DotfilesPolicy};
+use super::resolve::{path_has_dot_component, resolve_mount_miss_blocking};
+use super::DotfilesPolicy;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 static NEXT_MOUNT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Why a request path was rejected before touching the filesystem.
-enum PathReject {
-    /// Not ours to answer: let the next handler try (`fallthrough` mounts).
-    Fallthrough,
-    /// Answer with this bare status.
-    Status(u16),
+/// Every `%` starts a two-hex-digit escape (`decodeURIComponent` would not throw).
+fn percent_escapes_valid(s: &str) -> bool {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            if i + 2 >= b.len() {
+                return false;
+            }
+            if !(b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit()) {
+                return false;
+            }
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    true
 }
 
 #[derive(Clone)]
@@ -127,44 +139,29 @@ impl StaticMount {
         })
     }
 
-    /// Lexically normalises a percent-decoded mount-relative path (rejecting traversal) and
-    /// applies the dotfiles policy, before any filesystem access.
-    fn sanitize_rel_path(&self, decoded: &str) -> Result<PathBuf, PathReject> {
+    /// Lexically normalises a percent-decoded mount-relative path the way `send` does
+    /// (`normalize('./' + path)`) and applies the dotfiles policy, before any filesystem
+    /// access. `None` = not for the engine to answer: a path that climbs above the root or a
+    /// hidden file the policy refuses is handed to the JS handler, which raises the same
+    /// error (or falls through) as Express.
+    fn sanitize_rel_path(&self, decoded: &str) -> Option<PathBuf> {
         let mut clean_rel = PathBuf::new();
-        let mut has_dotfile = false;
         for comp in Path::new(decoded).components() {
             match comp {
-                Component::Normal(seg) => {
-                    if let Some(s) = seg.to_str() {
-                        if s.starts_with('.') {
-                            has_dotfile = true;
-                        }
-                    }
-                    clean_rel.push(seg);
-                }
+                Component::Normal(seg) => clean_rel.push(seg),
                 Component::RootDir | Component::CurDir => {}
-                Component::ParentDir | Component::Prefix(_) => {
-                    if self.fallthrough {
-                        return Err(PathReject::Fallthrough);
+                Component::ParentDir => {
+                    if !clean_rel.pop() {
+                        return None;
                     }
-                    return Err(PathReject::Status(403));
                 }
+                Component::Prefix(_) => return None,
             }
         }
-
-        if has_dotfile {
-            match self.dotfiles.as_str() {
-                "deny" => return Err(PathReject::Status(403)),
-                "ignore" => {
-                    if self.fallthrough {
-                        return Err(PathReject::Fallthrough);
-                    }
-                    return Err(PathReject::Status(404));
-                }
-                _ => {}
-            }
+        if self.dotfiles != "allow" && path_has_dot_component(&clean_rel) {
+            return None;
         }
-        Ok(clean_rel)
+        Some(clean_rel)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -221,20 +218,19 @@ impl StaticMount {
             }
         }
 
-        let decoded = percent_encoding::percent_decode_str(rel_raw).decode_utf8_lossy();
-        if decoded.contains('\0') {
-            write_simple_status(writer, write_buf, 400, is_head, x_powered_by, close_conn).await?;
-            return Ok(true);
+        // Malformed escapes, invalid UTF-8 and NUL bytes are 400s (or fall-throughs) that the
+        // JS handler raises as Express errors.
+        if !percent_escapes_valid(rel_raw) {
+            return Ok(false);
         }
-
-        let clean_rel = match self.sanitize_rel_path(decoded.as_ref()) {
-            Ok(p) => p,
-            Err(PathReject::Fallthrough) => return Ok(false),
-            Err(PathReject::Status(status)) => {
-                write_simple_status(writer, write_buf, status, is_head, x_powered_by, close_conn)
-                    .await?;
-                return Ok(true);
-            }
+        let Ok(decoded) = percent_encoding::percent_decode_str(rel_raw).decode_utf8() else {
+            return Ok(false);
+        };
+        if decoded.contains('\0') {
+            return Ok(false);
+        }
+        let Some(clean_rel) = self.sanitize_rel_path(decoded.as_ref()) else {
+            return Ok(false);
         };
 
         let root = self.root.clone();
@@ -252,7 +248,6 @@ impl StaticMount {
                 &index_files,
                 &extensions,
                 has_trailing_slash,
-                is_mount_root,
                 redirect,
                 dot_policy,
             )
@@ -288,7 +283,7 @@ mod tests {
     use crate::static_files::test_util::make_temp_dir;
 
     #[tokio::test]
-    async fn canon_containment_blocks_symlink_escape_and_missing_root_fails_closed() {
+    async fn canon_containment_defers_symlink_escape_and_missing_root_to_js() {
         let base = make_temp_dir("canon");
         let root = base.join("pub");
         let outside = base.join("outside");
@@ -334,14 +329,12 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert!(served);
-            let s = String::from_utf8_lossy(&out);
-            assert!(s.starts_with("HTTP/1.1 403 Forbidden\r\n"));
-            assert!(s.contains("Connection: close\r\n"));
-            assert!(!s.contains("TOP_SECRET"));
+            // Refused, not served: the JS handler raises the 403 (`ForbiddenError`).
+            assert!(!served);
+            assert!(out.is_empty());
         }
 
-        // Nonexistent root -> canon_root is None -> MUST fail closed (404 when !fallthrough)
+        // Nonexistent root -> canon_root is None -> MUST fail closed (handed to JS, never served)
         let missing_mount = StaticMount::new(
             "/miss".into(),
             base.join("does-not-exist"),
@@ -374,10 +367,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(served2);
-        let s2 = String::from_utf8_lossy(&out2);
-        assert!(s2.starts_with("HTTP/1.1 404 Not Found\r\n"));
-        assert!(s2.ends_with("\r\n\r\n")); // HEAD suppresses body
+        assert!(!served2);
+        assert!(out2.is_empty());
 
         let _ = std::fs::remove_dir_all(&base);
     }

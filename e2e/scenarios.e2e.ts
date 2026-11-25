@@ -1157,6 +1157,12 @@ process.stdin.on('end', async () => {
         // 7) Verify all Slowloris sockets closed cleanly
         const slowClosed = await Promise.all(slowlorisSockets.map((s) => s.waitForClose(1500)));
         expect(slowClosed).toEqual([true, true, true, true]);
+
+        // A fast run can finish before the probe has sampled enough: let it reach 5.
+        const probeDeadline = Date.now() + 3000;
+        while (probeResults.length < 5 && Date.now() < probeDeadline) {
+          await delay(25);
+        }
       } finally {
         probing = false;
         await probeTask;

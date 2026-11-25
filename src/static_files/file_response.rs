@@ -268,9 +268,15 @@ pub async fn write_file_response_from_open<W: AsyncWrite + Unpin>(
     cache_control: bool,
     max_age_secs: u64,
     immutable: bool,
+    window: Option<(u64, u64)>,
     x_powered_by: bool,
     close_conn: bool,
 ) -> Result<(), FileServeError> {
+    // `send`'s `start`/`end`: serve `len` bytes from `offset` (validators stay the whole file's).
+    let (base, view_size) = match window {
+        Some((off, len)) => (off.min(file_size), len.min(file_size.saturating_sub(off))),
+        None => (0, file_size),
+    };
     let etag_val = if enable_etag {
         Some(format_weak_etag(file_size, mtime))
     } else {
@@ -304,14 +310,14 @@ pub async fn write_file_response_from_open<W: AsyncWrite + Unpin>(
     }
 
     let mut range_start: u64 = 0;
-    let mut range_end: u64 = file_size.saturating_sub(1);
+    let mut range_end: u64 = view_size.saturating_sub(1);
     let mut is_partial = false;
 
     match resolve_range(
         accept_ranges,
         range_header,
         if_range,
-        file_size,
+        view_size,
         etag_val.as_deref(),
         last_mod_str.as_deref(),
     ) {
@@ -322,14 +328,14 @@ pub async fn write_file_response_from_open<W: AsyncWrite + Unpin>(
         }
         RangeOutcome::Unsatisfiable => {
             write_buf.clear();
-            append_416(write_buf, file_size, x_powered_by, emit_close);
+            append_416(write_buf, view_size, x_powered_by, emit_close);
             writer.write_all(write_buf).await?;
             return Ok(());
         }
         RangeOutcome::Full => {}
     }
 
-    let content_len = if file_size == 0 {
+    let content_len = if view_size == 0 {
         0
     } else {
         range_end - range_start + 1
@@ -346,7 +352,7 @@ pub async fn write_file_response_from_open<W: AsyncWrite + Unpin>(
             file_path,
             status: final_status,
             content_len,
-            file_size,
+            file_size: view_size,
             partial: is_partial.then_some((range_start, range_end)),
             etag: etag_val.as_deref(),
             last_modified: last_mod_str.as_deref(),
@@ -365,7 +371,14 @@ pub async fn write_file_response_from_open<W: AsyncWrite + Unpin>(
         return Ok(());
     }
 
-    write_file_body(writer, write_buf, &mut file, range_start, content_len).await
+    write_file_body(
+        writer,
+        write_buf,
+        &mut file,
+        base + range_start,
+        content_len,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -408,6 +421,7 @@ mod tests {
             false,
             0,
             false,
+            None,
             false,
             true,
         )

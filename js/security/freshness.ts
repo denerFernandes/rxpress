@@ -12,20 +12,16 @@ export function checkFreshness(
   if (!ifNoneMatch && !ifModifiedSince) return false;
   if (cacheControl && CACHE_CONTROL_NO_CACHE_REGEXP.test(cacheControl)) return false;
 
+  // fresh@2: If-None-Match takes precedence over If-Modified-Since.
   if (ifNoneMatch) {
-    if (ifNoneMatch.trim() !== '*') {
-      if (!etag) return false;
-      let etagStale = true;
-      const parts = ifNoneMatch.split(',');
-      for (let i = 0; i < parts.length; i++) {
-        const match = parts[i].trim();
-        if (match === etag || match === `W/${etag}` || `W/${match}` === etag) {
-          etagStale = false;
-          break;
-        }
-      }
-      if (etagStale) return false;
+    if (ifNoneMatch.trim() === '*') return true;
+    if (!etag) return false;
+    const parts = ifNoneMatch.split(',');
+    for (let i = 0; i < parts.length; i++) {
+      const match = parts[i].trim();
+      if (match === etag || match === `W/${etag}` || `W/${match}` === etag) return true;
     }
+    return false;
   }
 
   if (ifModifiedSince) {

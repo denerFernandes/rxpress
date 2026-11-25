@@ -9,6 +9,7 @@
  * loop allocates nothing beyond what each request needs.
  */
 import type { Application } from '../application.js';
+import { appProtos, applyAppProtos, type ProtoApp } from '../app-protos.js';
 import { BRIDGE_HEADER, parseBridgeHeader } from '../bridge.js';
 import type { NativeServerInstance } from '../native.js';
 import { BODY_MODE_STREAMED, ResponseBatchWriter } from '../protocol.js';
@@ -126,6 +127,7 @@ export class ServerRuntime {
     );
     const res = new RxResponse(app, req, this.writer, this.native, this.activeStreams);
     req.res = res;
+    if (appProtos.active !== 0) applyAppProtos(req, res, app as unknown as ProtoApp);
     return req;
   }
 

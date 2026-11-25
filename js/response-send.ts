@@ -30,7 +30,7 @@ const MAX_AGE_CAP_SECS = 31536000;
 type EtagSetting = boolean | string | ((body: string | Buffer, encoding?: string) => string | undefined);
 
 /** The `etag` package: `"<len hex>-<sha1 base64, 27 chars>"`, `W/` prefixed when weak. */
-function computeEtag(body: string | Uint8Array, weak: boolean): string {
+export function computeEtag(body: string | Uint8Array, weak: boolean): string {
   let tag: string;
   if (body.length === 0) {
     tag = '"0-2jmj7l5rSw0yVb/vlWAYkK/YBwk"';
@@ -171,7 +171,7 @@ export function sendJson(res: RxResponse, body?: unknown): RxResponse {
     replacer !== undefined || spaces !== undefined
       ? JSON.stringify(body, replacer, spaces)
       : JSON.stringify(body);
-  const payload = str === undefined ? '' : str;
+  const payload = str === undefined ? '' : res.app._jsonEscape ? escapeJsonHtml(str) : str;
   applyCustomEtag(res, payload);
 
   // Ultra-fast path: no custom headers, no wrapped writeHead/end/write, not streaming
@@ -213,6 +213,13 @@ export function sendJson(res: RxResponse, body?: unknown): RxResponse {
   return res;
 }
 
+/** `json escape`: `<`, `>` and `&` as `\uXXXX`, so the JSON cannot be sniffed as HTML. */
+function escapeJsonHtml(json: string): string {
+  return json.replace(/[<>&]/g, (c) =>
+    c === '<' ? '\\u003c' : c === '>' ? '\\u003e' : '\\u0026'
+  );
+}
+
 /** @internal `res.jsonp()`. */
 export function sendJsonp(res: RxResponse, body?: unknown): RxResponse {
   // Express: sending after headers went out (res.write/res.end/res.send) throws.
@@ -229,7 +236,7 @@ export function sendJsonp(res: RxResponse, body?: unknown): RxResponse {
         (replacer !== undefined || spaces !== undefined
           ? JSON.stringify(body, replacer, spaces)
           : JSON.stringify(body)) ?? '';
-      const escaped = jsonStr
+      const escaped = (res.app._jsonEscape ? escapeJsonHtml(jsonStr) : jsonStr)
         .replace(/\u2028/g, '\\u2028')
         .replace(/\u2029/g, '\\u2029');
       const payload = `/**/ typeof ${safeCb} === 'function' && ${safeCb}(${escaped});`;
@@ -579,11 +586,13 @@ function encodeFileMeta(
   optsBits: number,
   maxAgeSecs: number,
   pathForRust: string,
-  absRoot: string | undefined
+  absRoot: string | undefined,
+  window: [number, number] | null
 ): Buffer {
   const pathBytes = Buffer.from(pathForRust, 'utf8');
   const rootBytes = absRoot !== undefined ? Buffer.from(absRoot, 'utf8') : null;
-  const payloadLen = 9 + pathBytes.length + (rootBytes ? 4 + rootBytes.length : 0);
+  const payloadLen =
+    9 + pathBytes.length + (rootBytes ? 4 + rootBytes.length : 0) + (window ? 16 : 0);
   const metaBuf = Buffer.allocUnsafe(payloadLen);
   let mp = 0;
   metaBuf[mp++] = optsBits;
@@ -597,6 +606,11 @@ function encodeFileMeta(
     metaBuf.writeUInt32LE(rootBytes.length >>> 0, mp);
     mp += 4;
     rootBytes.copy(metaBuf, mp);
+    mp += rootBytes.length;
+  }
+  if (window) {
+    metaBuf.writeBigUInt64LE(BigInt(window[0]), mp);
+    metaBuf.writeBigUInt64LE(BigInt(window[1]), mp + 8);
   }
   return metaBuf;
 }
@@ -706,7 +720,8 @@ async function sendFileAsync(
     const fh = await open(canonFile, 'r');
     await fh.close();
 
-    if (res.headersSent || res.writableEnded) {
+    // The client went away (or the response already ended): Express reports ECONNABORTED.
+    if (res.headersSent || res.writableEnded || res.req.aborted || res.destroyed) {
       if (cb) {
         cb(
           Object.assign(new Error('Request aborted'), {
@@ -747,7 +762,19 @@ async function sendFileAsync(
     if (enableEtag) optsBits |= 0x80;
 
     const pathForRust = hasRoot ? relUnderRoot : canonFile;
-    const metaBuf = encodeFileMeta(optsBits, maxAgeSecs, pathForRust, absRoot);
+    // `send`'s `start`/`end` options: the byte window served (as `[offset, len]`).
+    const { start, end } = options as { start?: number; end?: number };
+    let window: [number, number] | null = null;
+    if (start !== undefined || end !== undefined) {
+      const offset = Math.max(0, Math.floor(Number(start) || 0));
+      let len = Math.max(0, st.size - offset);
+      if (end !== undefined) {
+        const bytes = Number(end) - offset + 1;
+        if (len > bytes) len = Math.max(0, Math.floor(bytes));
+      }
+      window = [offset, len];
+    }
+    const metaBuf = encodeFileMeta(optsBits, maxAgeSecs, pathForRust, absRoot, window);
 
     res._triggerWriteHeadHook();
     let flags = RESP_FLAG_IS_FILE | RESP_FLAG_FILE_META;

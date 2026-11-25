@@ -197,7 +197,7 @@ function compileLayer(st: CompileState, layer: Layer, i: number): void {
 function tryAddNativeStatic(st: CompileState, layer: Layer): boolean {
   if (layer.nativeMeta?.__rxNativeKind === 'static' && layer.nativeMeta.staticConfig) {
     const sc = layer.nativeMeta.staticConfig;
-    if (!st.seenJsMiddleware && !st.seenRoute && !sc.hasSetHeaders && typeof layer.path === 'string') {
+    if (!st.seenJsMiddleware && !st.seenRoute && !sc.hasSetHeaders && !sc.jsOnly && typeof layer.path === 'string') {
       const extra =
         typeof layer.handle === 'function'
           ? staticExtraMeta.get(layer.handle as RequestHandler)

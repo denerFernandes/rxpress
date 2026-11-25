@@ -39,6 +39,7 @@ import {
   setType,
 } from './response-headers.js';
 import { formatResponse, renderView } from './response-render.js';
+import { installOutHeadersView } from './response-node-compat.js';
 import {
   addEventListener,
   countListeners,
@@ -240,7 +241,7 @@ export class RxResponse {
     return this;
   }
 
-  public links(links: Record<string, string>): this {
+  public links(links: Record<string, string | string[]>): this {
     setLinks(this, links);
     return this;
   }
@@ -578,3 +579,4 @@ export class RxResponse {
   }
 }
 
+installOutHeadersView(RxResponse.prototype);

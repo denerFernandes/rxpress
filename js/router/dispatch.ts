@@ -4,6 +4,7 @@ import type { RxResponse } from '../response.js';
 import type { ErrorRequestHandler, NextFunction, ParamHandler, RequestHandler } from '../types.js';
 import type { AnyHandler, Layer } from './layer.js';
 import type { PathMatchResult } from './path-compile.js';
+import { enterApp, type ProtoApp } from '../app-protos.js';
 
 /** @internal Internal failures while advancing the stack always carry an error. */
 export function normalizeThrownError(err: unknown): unknown {
@@ -89,6 +90,16 @@ function recordOptionsMethods(req: RxRequest, layer: Layer): void {
   } else if (layer.method) {
     add(layer.method);
   }
+}
+
+/** router@2 `sendOptionsResponse`: unique, sorted, `, `-joined methods as plain text. */
+function sendOptionsResponse(res: RxResponse, methods: string[]): void {
+  const allow = Array.from(new Set(methods)).sort().join(', ');
+  res.setHeader('Allow', allow);
+  res.setHeader('Content-Length', Buffer.byteLength(allow));
+  res.setHeader('Content-Type', 'text/plain');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.end(allow);
 }
 
 /** OPTIONS request reached a layer of another method: its methods join `Allow` if the path matches. */
@@ -180,11 +191,29 @@ export function handleRouter(
   let slashAdded = false;
   let sync = 0;
 
+  // router@2: an OPTIONS request collects the methods of this router's matching routes and,
+  // when the router is done without an error, answers with them (a failure, e.g. headers
+  // already sent, goes to the parent's error handlers).
+  let done: NextFunction = out;
+  if (typeof req.method === 'string' && req.method.toUpperCase() === 'OPTIONS') {
+    const outerMethods = req._optionsMethods;
+    req._optionsMethods = [];
+    done = (err?: unknown) => {
+      const methods = req._optionsMethods ?? [];
+      req._optionsMethods = outerMethods;
+      if ((err !== undefined && err !== null) || methods.length === 0) return out(err);
+      try {
+        sendOptionsResponse(res, methods);
+      } catch (sendErr) {
+        out(sendErr);
+      }
+    };
+  }
+
   const restore = () => {
     req.baseUrl = parentBaseUrl;
     req.params = parentParams;
-    req.app = parentApp;
-    res.app = parentApp;
+    enterApp(req, res, parentApp as unknown as ProtoApp);
   };
 
   // Framework-internal failures while advancing the stack (e.g. user code froze `req`,
@@ -194,7 +223,7 @@ export function handleRouter(
     try {
       step(err);
     } catch (internalErr) {
-      out(normalizeThrownError(internalErr));
+      done(normalizeThrownError(internalErr));
     }
   };
 
@@ -215,7 +244,7 @@ export function handleRouter(
 
     if (layerError === 'router') {
       restore();
-      return out();
+      return done();
     }
 
     if (++sync > MAX_SYNC_STACK) {
@@ -229,7 +258,7 @@ export function handleRouter(
     const currentPath = pathOf(req, url, protohost);
     if (currentPath === undefined) {
       restore();
-      return out(layerError);
+      return done(layerError);
     }
 
     const m = typeof req.method === 'string' ? req.method.toUpperCase() : req.method;
@@ -239,7 +268,7 @@ export function handleRouter(
     for (;;) {
       if (idx >= stack.length) {
         restore();
-        return out(layerError);
+        return done(layerError);
       }
       layer = stack[idx++];
 
@@ -272,8 +301,7 @@ export function handleRouter(
       if (match) break;
     }
 
-    req.app = parentApp;
-    res.app = parentApp;
+    enterApp(req, res, parentApp as unknown as ProtoApp);
 
     // Merge params according to router options using null-prototype map
     const mergedParams: Record<string, string> = router._options.mergeParams
@@ -299,8 +327,7 @@ export function handleRouter(
         }
         if (layer.isRouter) {
           if (layer.subApp) {
-            req.app = layer.subApp;
-            res.app = layer.subApp;
+            enterApp(req, res, layer.subApp as unknown as ProtoApp);
           }
           (layer.handle as Router).handle(req, res, next, 0, layerError);
         } else {

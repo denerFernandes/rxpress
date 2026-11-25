@@ -135,6 +135,7 @@ export class RxRequest {
   /** @internal */ private _body: unknown = undefined;
   /** @internal */ private _bodyInitialized = false;
   /** @internal */ private _cookies: Record<string, string> | null = null;
+  /** @internal */ public _hideCookies = false;
   /** @internal */ private _signedCookies: Record<string, unknown> | null = null;
   /** @internal */ public _socket: RxSocket | null = null;
   /** @internal */ public _optionsMethods: string[] | null = null;
@@ -367,6 +368,8 @@ export class RxRequest {
 
   get cookies(): Record<string, string> {
     if (this._cookies !== null) return this._cookies;
+    // `cookie-parser` is running (see the router): it must see no cookies yet.
+    if (this._hideCookies) return undefined as unknown as Record<string, string>;
     const out = parseCookieHeader(this.get('cookie'));
     this._cookies = out;
     return out;
@@ -384,6 +387,8 @@ export class RxRequest {
   set signedCookies(val: Record<string, unknown>) { this._signedCookies = val; }
 
   public get(name: string): string | undefined {
+    if (!name) throw new TypeError('name argument is required to req.get');
+    if (typeof name !== 'string') throw new TypeError('name must be a string to req.get');
     const lc = name.toLowerCase();
     const h = this.headers;
     if (lc === 'referer' || lc === 'referrer') {

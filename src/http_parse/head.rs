@@ -19,6 +19,8 @@ pub struct ParsedMeta {
     pub range: Option<(usize, usize)>,
     /// `Connection: upgrade` together with an `Upgrade` header (Node's `req.upgrade`).
     pub upgrade: bool,
+    /// `If-Match` or `If-Unmodified-Since` is present (precondition checks are left to JS).
+    pub precondition: bool,
 }
 
 pub enum ParseOutcome {
@@ -243,6 +245,7 @@ fn finish_parse(buf: &[u8], req: &httparse::Request<'_, '_>, header_len: usize) 
     let mut if_none_match = None;
     let mut if_modified_since = None;
     let mut range = None;
+    let mut precondition = false;
 
     let mut headers_start = header_len;
     let headers_end = header_len.saturating_sub(2);
@@ -324,6 +327,10 @@ fn finish_parse(buf: &[u8], req: &httparse::Request<'_, '_>, header_len: usize) 
                 } else if name.eq_ignore_ascii_case(b"if-modified-since") {
                     let vs = val.as_ptr() as usize - base_ptr;
                     if_modified_since = Some((vs, vs + val.len()));
+                } else if name.eq_ignore_ascii_case(b"if-match")
+                    || name.eq_ignore_ascii_case(b"if-unmodified-since")
+                {
+                    precondition = true;
                 }
             }
             b'u' if name.eq_ignore_ascii_case(b"upgrade") => {
@@ -377,6 +384,7 @@ fn finish_parse(buf: &[u8], req: &httparse::Request<'_, '_>, header_len: usize) 
         if_modified_since,
         range,
         upgrade: saw_upgrade_token && has_upgrade_header,
+        precondition,
     })
 }
 

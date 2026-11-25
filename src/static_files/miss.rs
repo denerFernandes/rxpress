@@ -5,7 +5,7 @@ use super::file_response::write_file_response_from_open;
 use super::mount::StaticMount;
 use super::redirect::write_dir_redirect;
 use super::resolve::MissResolve;
-use super::{write_simple_status, FileServeError};
+use super::FileServeError;
 use bytes::Bytes;
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -49,20 +49,9 @@ impl StaticMount {
                 .await?;
                 Ok(true)
             }
-            MissResolve::Forbidden => {
-                write_simple_status(writer, write_buf, 403, is_head, x_powered_by, close_conn)
-                    .await?;
-                Ok(true)
-            }
-            MissResolve::NotFound => {
-                if self.fallthrough {
-                    Ok(false)
-                } else {
-                    write_simple_status(writer, write_buf, 404, is_head, x_powered_by, close_conn)
-                        .await?;
-                    Ok(true)
-                }
-            }
+            // Misses and refusals go to the JS handler: it falls through or raises the
+            // Express error (`NotFoundError`, `ForbiddenError`, ...) for the app's handlers.
+            MissResolve::Forbidden | MissResolve::NotFound => Ok(false),
             MissResolve::SmallFile {
                 resolved_path,
                 data,
@@ -266,28 +255,15 @@ impl StaticMount {
             true,
             self.max_age_secs,
             self.immutable,
+            None,
             x_powered_by,
             close_conn,
         )
         .await
         {
             Ok(()) => Ok(true),
-            Err(FileServeError::PreHeader(status)) => {
-                if status == 404 && self.fallthrough {
-                    Ok(false)
-                } else {
-                    write_simple_status(
-                        writer,
-                        write_buf,
-                        status,
-                        is_head,
-                        x_powered_by,
-                        close_conn,
-                    )
-                    .await?;
-                    Ok(true)
-                }
-            }
+            // Nothing written yet: the JS handler answers (or falls through) as Express would.
+            Err(FileServeError::PreHeader(_)) => Ok(false),
             Err(FileServeError::StreamAborted(e)) => Err(e),
         }
     }

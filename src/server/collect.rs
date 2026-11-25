@@ -352,7 +352,7 @@ impl<S: ConnStream> Conn<'_, '_, S> {
                 let no_cache = (item.if_none_match.is_some() || item.if_modified_since.is_some())
                     && header_block_has_no_cache(hb);
 
-                if write_buffered_response(
+                match write_buffered_response(
                     &mut *self.stream,
                     &mut self.write_buf,
                     status,
@@ -367,13 +367,21 @@ impl<S: ConnStream> Conn<'_, '_, S> {
                     item_close,
                 )
                 .await
-                .is_err()
                 {
-                    ctx.notify_aborted(self.shared, idx);
-                    return Break(false);
+                    Err(_) => {
+                        ctx.notify_aborted(self.shared, idx);
+                        Break(false)
+                    }
+                    // A close-delimited body: nothing else can follow on this connection.
+                    Ok(true) => {
+                        self.write_buf.clear();
+                        Break(true)
+                    }
+                    Ok(false) => {
+                        self.write_buf.clear();
+                        Continue(())
+                    }
                 }
-                self.write_buf.clear();
-                Continue(())
             }
             SlotResponse::Stream {
                 status,

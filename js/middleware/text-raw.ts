@@ -16,7 +16,8 @@ import {
 /**
  * Express-compatible `express.text(options)` backed by Rust body ingestion.
  */
-export function text(options: TextOptions = {}): RequestHandler {
+export function text(opts?: TextOptions): RequestHandler {
+  const options: TextOptions = opts ?? {};
   const limit = parseSizeLimit(options.limit, 100 * 1024);
   const defaultCharset = (options.defaultCharset || 'utf-8').toLowerCase();
   const inflate = options.inflate !== false;
@@ -50,7 +51,8 @@ export function text(options: TextOptions = {}): RequestHandler {
 /**
  * Express-compatible `express.raw(options)` backed by Rust body ingestion.
  */
-export function raw(options: RawOptions = {}): RequestHandler {
+export function raw(opts?: RawOptions): RequestHandler {
+  const options: RawOptions = opts ?? {};
   const limit = parseSizeLimit(options.limit, 100 * 1024);
   const inflate = options.inflate !== false;
   checkVerifyOption(options.verify);

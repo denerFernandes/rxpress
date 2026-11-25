@@ -38,6 +38,26 @@ function isHandlerLike(h: unknown): boolean {
   );
 }
 
+/**
+ * rxpress parses `req.cookies` on its own, but the `cookie-parser` middleware skips everything
+ * (including `req.secret` for signed cookies) when `req.cookies` is already set. While it runs,
+ * the built-in value is hidden so it does its full work, as it would under Express.
+ */
+function withCookieParserShim<T>(h: T): T {
+  if (typeof h !== 'function' || h.name !== 'cookieParser' || h.length !== 3) return h;
+  const fn = h as unknown as (req: RxRequest, res: RxResponse, next: NextFunction) => unknown;
+  const shim = function cookieParser(req: RxRequest, res: RxResponse, next: NextFunction) {
+    const own = (req as { _hideCookies?: boolean })._hideCookies;
+    if (own === false) (req as { _hideCookies: boolean })._hideCookies = true;
+    try {
+      return fn(req, res, next);
+    } finally {
+      if (own === false) (req as { _hideCookies: boolean })._hideCookies = false;
+    }
+  };
+  return shim as unknown as T;
+}
+
 /** Deep flatten that keeps `null` / `undefined`, so they can be rejected like Express does. */
 function flattenAll(input: unknown[], out: unknown[] = []): unknown[] {
   for (const item of input) {
@@ -257,7 +277,9 @@ export class Router {
     // An app from another Express copy: mounted under `req.app` when first reached.
     const mountPath = paths.length === 1 ? paths[0] : paths;
     const handlers = (split.handlers as Array<AnyHandler | Router>).map((h) =>
-      isForeignExpressApp(h) ? (mountForeignApp(h, mountPath, null) as unknown as AnyHandler) : h
+      isForeignExpressApp(h)
+        ? (mountForeignApp(h, mountPath, null) as unknown as AnyHandler)
+        : withCookieParserShim(h)
     );
     for (const p of paths) {
       const matcher = compilePathMatcher(p, {

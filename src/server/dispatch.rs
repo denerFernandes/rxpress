@@ -73,6 +73,7 @@ impl<S: ConnStream> Conn<'_, '_, S> {
             if self.in_flight.is_empty()
                 && !has_body_framing
                 && !meta.expect_100
+                && !meta.precondition
                 && !self.shared.static_mounts.is_empty()
                 && (method == MethodCode::Get || method == MethodCode::Head)
             {
@@ -253,6 +254,7 @@ impl<S: ConnStream> Conn<'_, '_, S> {
         // only paths under some mount take this path.)
         if !has_body_framing
             && !meta.expect_100
+            && !meta.precondition
             && !shared.static_mounts.is_empty()
             && (method_code == MethodCode::Get || method_code == MethodCode::Head)
             && shared

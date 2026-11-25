@@ -17,7 +17,8 @@ import {
 /**
  * Express-compatible `express.urlencoded(options)` backed by Rust body ingestion.
  */
-export function urlencoded(options: UrlencodedOptions = {}): RequestHandler {
+export function urlencoded(opts?: UrlencodedOptions): RequestHandler {
+  const options: UrlencodedOptions = opts ?? {};
   const limit = parseSizeLimit(options.limit, 100 * 1024);
   const extended = Boolean(options.extended);
   const inflate = options.inflate !== false;

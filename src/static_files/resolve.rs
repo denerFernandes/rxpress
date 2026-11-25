@@ -87,7 +87,6 @@ pub(super) fn resolve_mount_miss_blocking(
     index_files: &[String],
     extensions: &[String],
     has_trailing_slash: bool,
-    is_mount_root: bool,
     redirect: bool,
     dot_policy: DotfilesPolicy,
 ) -> MissResolve {
@@ -105,7 +104,7 @@ pub(super) fn resolve_mount_miss_blocking(
     let opened = match std::fs::metadata(&candidate) {
         Ok(meta) => {
             if meta.is_file() {
-                if has_trailing_slash && !is_mount_root {
+                if has_trailing_slash {
                     return MissResolve::NotFound;
                 }
                 match try_open_contained(&candidate, &canon_root, dot_policy) {

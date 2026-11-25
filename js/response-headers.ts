@@ -233,10 +233,16 @@ export function addVary(res: RxResponse, field: string | string[]): void {
 }
 
 /** @internal `res.links()`. */
-export function setLinks(res: RxResponse, links: Record<string, string>): void {
-  let link = res.get('link') || '';
+export function setLinks(res: RxResponse, links: Record<string, string | string[]>): void {
+  const cur = res.get('link');
+  let link = Array.isArray(cur) ? cur.join(', ') : cur ? String(cur) : '';
   if (link) link += ', ';
-  const entries = Object.keys(links).map((rel) => `<${links[rel]}>; rel="${rel}"`);
+  const entries = Object.keys(links).map((rel) => {
+    const v = links[rel];
+    return Array.isArray(v)
+      ? v.map((one) => `<${one}>; rel="${rel}"`).join(', ')
+      : `<${v}>; rel="${rel}"`;
+  });
   res.setHeader('link', link + entries.join(', '));
 }
 
@@ -294,9 +300,10 @@ export function setCookie(res: RxResponse, name: string, value: unknown, options
     val = 's:' + signCookieValue(val, signKey);
   }
 
-  if (opts.maxAge !== undefined) {
+  // Express: `maxAge` (null and undefined mean unset) always wins over `expires`.
+  if (opts.maxAge != null) {
     const maxAgeNum = Number(opts.maxAge);
-    if (Number.isFinite(maxAgeNum) && !opts.expires) {
+    if (!Number.isNaN(maxAgeNum)) {
       opts.expires = new Date(Date.now() + maxAgeNum);
     }
   }
@@ -314,7 +321,8 @@ export function setAttachment(res: RxResponse, filename?: string): void {
 
 /** @internal `res.setHeader()` (Node semantics, validated like `ServerResponse`). */
 export function putHeader(res: RxResponse, name: string, value: string | number | readonly string[]): void {
-  if (res.headersSent) {
+  // Node: once writeHead() ran, the head is fixed (ERR_HTTP_HEADERS_SENT).
+  if (res.headersSent || res._header !== null) {
     throwHeadersSent('set');
   }
   // Same synchronous errors as Node's ServerResponse (ERR_INVALID_HTTP_TOKEN / ERR_INVALID_CHAR /

@@ -54,7 +54,7 @@ export function serializeCookie(name: string, val: string, options: CookieOption
 
   let str = `${name}=${value}`;
 
-  if (options.maxAge !== undefined) {
+  if (options.maxAge != null) {
     const maxAge = Number(options.maxAge);
     if (!Number.isFinite(maxAge)) {
       throw new TypeError('option maxAge is invalid');
