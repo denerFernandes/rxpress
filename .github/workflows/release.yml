@@ -12,8 +12,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  verify:
+    name: Verify the tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches package version
+        run: |
+          test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}" \
+            || { echo "tag ${GITHUB_REF_NAME} does not match package.json version"; exit 1; }
+      - name: CHANGELOG has a section for this version
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" > /dev/null
+      - name: CI is green on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --limit 1 --json conclusion --jq '.[0].conclusion')
+          if [ "$conclusion" != "success" ]; then
+            echo "CI for $GITHUB_SHA is '${conclusion:-not finished}'. Wait for it to pass, then re-run this workflow."
+            exit 1
+          fi
+
   build:
     name: Build ${{ matrix.suffix }}
+    needs: verify
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -107,11 +132,6 @@ jobs:
           done
           ls -l npm/*/*.node
 
-      - name: Check tag matches package version
-        run: |
-          test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}" \
-            || { echo "tag ${GITHUB_REF_NAME} does not match package.json version"; exit 1; }
-
       - run: node scripts/version-sync.mjs
 
       - name: Build TypeScript
@@ -119,15 +139,52 @@ jobs:
           npm install --no-audit --no-fund
           npm run build:ts
 
+      # Publishing skips a package whose version already exists, so a run that failed halfway can
+      # be re-run.
       - name: Publish platform packages
         run: |
           for dir in npm/*/; do
-            (cd "$dir" && npm publish --provenance --access public)
+            (
+              cd "$dir"
+              name=$(node -p "require('./package.json').name")
+              version=$(node -p "require('./package.json').version")
+              if npm view "$name@$version" version >/dev/null 2>&1; then
+                echo "skip $name@$version: already published"
+              else
+                npm publish --provenance --access public
+              fi
+            )
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish rxpress
-        run: npm publish --provenance --access public
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "skip $name@$version: already published"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  github-release:
+    name: GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the release from the changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" > notes.md
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists"
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+          fi

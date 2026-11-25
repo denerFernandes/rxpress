@@ -2,7 +2,13 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+# A newer push to the same branch or pull request replaces the run in progress.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -24,13 +30,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # NOTE: `npm ci` requires package-lock.json to list the optionalDependencies platform
-      # packages, which only exist on the registry after the first release. Until the lockfile is
-      # regenerated with `npm install` (post-publish), use `npm install`.
+      # `npm install`, not `npm ci`: optionalDependencies pin the version being released, and
+      # those platform packages only exist on the registry after the release is published.
       - run: npm install --no-audit --no-fund
       - run: cargo fmt --check
       - run: cargo clippy --release -- -D warnings
       - run: npx tsc --noEmit
+      - name: The published package contains only the build
+        run: |
+          npm run build:ts
+          npm pack --dry-run --json | node scripts/check-pack.mjs
 
   test:
     name: Test (${{ matrix.os }}, node ${{ matrix.node }})
