@@ -1,0 +1,45 @@
+[package]
+name = "rxpress-native"
+version = "0.1.0"
+edition = "2021"
+description = "Ultra-fast Express-compatible HTTP/HTTPS engine for Node.js written in Rust"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Exposes internals to the cargo-fuzz targets in fuzz/. Never enable in release builds.
+fuzzing = []
+
+[dependencies]
+libc = "0.2"
+napi = { version = "2.16", default-features = false, features = ["napi8", "tokio_rt"] }
+napi-derive = "2.16"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "fs", "time", "macros"] }
+httparse = "1"
+bytes = "1"
+matchit = "0.8"
+crossbeam-queue = "0.3"
+parking_lot = "0.12"
+rustc-hash = "2"
+futures-util = "0.3"
+mime_guess = "2"
+httpdate = "1"
+socket2 = { version = "0.5", features = ["all"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+percent-encoding = "2"
+sha1_smol = "1"
+itoa = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+strip = "symbols"

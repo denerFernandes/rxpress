@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # NOTE: `npm ci` requires package-lock.json to list the optionalDependencies platform
+      # packages, which only exist on the registry after the first release. Until the lockfile is
+      # regenerated with `npm install` (post-publish), use `npm install`.
+      - run: npm install --no-audit --no-fund
+      - run: cargo fmt --check
+      - run: cargo clippy --release -- -D warnings
+      - run: npx tsc --noEmit
+
+  test:
+    name: Test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    # Windows: the engine's 'upgrade' hand-off is unix-only, so some e2e/tests are expected to
+    # fail there until it is implemented. Allow failure rather than claim it passes.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
+      - run: cargo test
+      - run: npm test
+      - run: npm run test:e2e
+
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+      - run: npm install --no-audit --no-fund
+      - run: npm audit --omit=dev

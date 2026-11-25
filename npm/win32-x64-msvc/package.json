@@ -1,0 +1,23 @@
+{
+  "name": "rxpress-win32-x64-msvc",
+  "version": "0.1.0",
+  "description": "rxpress native addon for win32-x64-msvc",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "rxpress.win32-x64-msvc.node",
+  "files": [
+    "rxpress.win32-x64-msvc.node"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/denerFernandes/rxpress.git"
+  }
+}

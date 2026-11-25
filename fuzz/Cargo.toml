@@ -1,0 +1,57 @@
+[package]
+name = "rxpress-native-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bytes = "1"
+tokio = { version = "1", features = ["rt", "io-util", "time", "sync", "macros"] }
+
+[dependencies.rxpress-native]
+path = ".."
+features = ["fuzzing"]
+
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "http_head"
+path = "fuzz_targets/http_head.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chunked"
+path = "fuzz_targets/chunked.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "range"
+path = "fuzz_targets/range.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sendfile_payload"
+path = "fuzz_targets/sendfile_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "response_batch"
+path = "fuzz_targets/response_batch.rs"
+test = false
+doc = false
+bench = false

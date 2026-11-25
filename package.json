@@ -1,0 +1,85 @@
+{
+  "name": "rxpress",
+  "version": "0.1.0",
+  "description": "Express 5 compatible HTTP/HTTPS server for Node.js with a Rust engine",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build:native": "node scripts/build-native.mjs",
+    "build:native:debug": "node scripts/build-native.mjs --debug",
+    "build:ts": "tsup && node scripts/fix-cjs-dts.mjs",
+    "build": "npm run build:native && npm run build:ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "bench": "node bench/run.mjs",
+    "test:e2e": "vitest run -c vitest.e2e.config.ts",
+    "lint": "cargo fmt --check && cargo clippy --release -- -D warnings && tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "version-sync": "node scripts/version-sync.mjs"
+  },
+  "devDependencies": {
+    "@fastify/cors": "^11.4.3",
+    "@fastify/static": "^10.1.12",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/morgan": "^1.9.9",
+    "@types/node": "^22.0.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "fast-check": "^4.11.0",
+    "fastify": "^5.12.8",
+    "helmet": "^8.1.0",
+    "morgan": "^1.10.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "optionalDependencies": {
+    "rxpress-darwin-arm64": "0.1.0",
+    "rxpress-darwin-x64": "0.1.0",
+    "rxpress-linux-arm64-gnu": "0.1.0",
+    "rxpress-linux-arm64-musl": "0.1.0",
+    "rxpress-linux-x64-gnu": "0.1.0",
+    "rxpress-linux-x64-musl": "0.1.0",
+    "rxpress-win32-x64-msvc": "0.1.0"
+  },
+  "keywords": [
+    "express",
+    "http",
+    "https",
+    "rust",
+    "napi",
+    "server",
+    "websocket"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/denerFernandes/rxpress.git"
+  },
+  "homepage": "https://github.com/denerFernandes/rxpress#readme",
+  "bugs": {
+    "url": "https://github.com/denerFernandes/rxpress/issues"
+  }
+}

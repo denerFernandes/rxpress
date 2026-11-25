@@ -1,0 +1,10 @@
+node_modules/
+target/
+dist/
+native/
+*.node
+.DS_Store
+
+# prebuilt binaries placed into platform packages by build/release
+npm/*/*.node
+node_modules
