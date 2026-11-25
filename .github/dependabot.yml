@@ -8,6 +8,16 @@ updates:
     ignore:
       # Platform packages are published by the release workflow, not updated by hand.
       - dependency-name: "@rxpress/*"
+      # Types follow the oldest supported Node.js (22), so a newer major would let code use APIs
+      # that do not exist there.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # tsup 9 changes the shape of dist/index.d.cts, which scripts/fix-cjs-dts.mjs rewrites.
+      - dependency-name: "tsup"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 7 is the native compiler; adopt it deliberately, not through a bot.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       dev-dependencies:
         dependency-type: development
@@ -16,6 +26,13 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # napi 3 removed ThreadsafeFunction's error strategy and JsFunction, and changed the
+      # macros; moving to it is a code migration, tracked in an issue.
+      - dependency-name: "napi"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "napi-derive"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
