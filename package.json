@@ -1,5 +1,5 @@
 {
-  "name": "@denerfernandes/rxpress",
+  "name": "@rxpress/rxpress",
   "version": "0.1.0",
   "description": "Express 5 compatible HTTP/HTTPS server for Node.js with a Rust engine",
   "type": "module",
@@ -58,13 +58,13 @@
     "node": ">=22"
   },
   "optionalDependencies": {
-    "@denerfernandes/rxpress-darwin-arm64": "0.1.0",
-    "@denerfernandes/rxpress-darwin-x64": "0.1.0",
-    "@denerfernandes/rxpress-linux-arm64-gnu": "0.1.0",
-    "@denerfernandes/rxpress-linux-arm64-musl": "0.1.0",
-    "@denerfernandes/rxpress-linux-x64-gnu": "0.1.0",
-    "@denerfernandes/rxpress-linux-x64-musl": "0.1.0",
-    "@denerfernandes/rxpress-win32-x64-msvc": "0.1.0"
+    "@rxpress/rxpress-darwin-arm64": "0.1.0",
+    "@rxpress/rxpress-darwin-x64": "0.1.0",
+    "@rxpress/rxpress-linux-arm64-gnu": "0.1.0",
+    "@rxpress/rxpress-linux-arm64-musl": "0.1.0",
+    "@rxpress/rxpress-linux-x64-gnu": "0.1.0",
+    "@rxpress/rxpress-linux-x64-musl": "0.1.0",
+    "@rxpress/rxpress-win32-x64-msvc": "0.1.0"
   },
   "keywords": [
     "express",

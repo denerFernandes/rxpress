@@ -5,20 +5,20 @@ HTTP/HTTPS server for Node.js with the networking engine written in Rust (N-API)
 ## Installation
 
 ```bash
-npm install @denerfernandes/rxpress
+npm install @rxpress/rxpress
 ```
 
-The native binary ships in per-platform packages (`@denerfernandes/rxpress-<target>`) installed automatically as `optionalDependencies`; npm only downloads the one for your machine. Do not use `--omit=optional`/`--no-optional`. Requires Node.js >= 22.
+The native binary ships in per-platform packages (`@rxpress/rxpress-<target>`) installed automatically as `optionalDependencies`; npm only downloads the one for your machine. Do not use `--omit=optional`/`--no-optional`. Requires Node.js >= 22.
 
 | Target | Package |
 | --- | --- |
-| macOS Apple Silicon | `@denerfernandes/rxpress-darwin-arm64` |
-| macOS Intel | `@denerfernandes/rxpress-darwin-x64` |
-| Linux x64 (glibc) | `@denerfernandes/rxpress-linux-x64-gnu` |
-| Linux x64 (musl/Alpine) | `@denerfernandes/rxpress-linux-x64-musl` |
-| Linux arm64 (glibc) | `@denerfernandes/rxpress-linux-arm64-gnu` |
-| Linux arm64 (musl/Alpine) | `@denerfernandes/rxpress-linux-arm64-musl` |
-| Windows x64 | `@denerfernandes/rxpress-win32-x64-msvc` |
+| macOS Apple Silicon | `@rxpress/rxpress-darwin-arm64` |
+| macOS Intel | `@rxpress/rxpress-darwin-x64` |
+| Linux x64 (glibc) | `@rxpress/rxpress-linux-x64-gnu` |
+| Linux x64 (musl/Alpine) | `@rxpress/rxpress-linux-x64-musl` |
+| Linux arm64 (glibc) | `@rxpress/rxpress-linux-arm64-gnu` |
+| Linux arm64 (musl/Alpine) | `@rxpress/rxpress-linux-arm64-musl` |
+| Windows x64 | `@rxpress/rxpress-win32-x64-msvc` |
 
 If no binary loads, the error names the expected package. In a clone of the repository, `npm run build:native` produces `native/rxpress.node`, which takes precedence over the platform packages.
 
@@ -75,7 +75,7 @@ npm run build && node bench/run.mjs
 ## Usage
 
 ```ts
-import express from '@denerfernandes/rxpress';
+import express from '@rxpress/rxpress';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
@@ -126,7 +126,7 @@ app.listen(3000, () => {
 
 ```ts
 import { readFileSync } from 'node:fs';
-import express from '@denerfernandes/rxpress';
+import express from '@rxpress/rxpress';
 
 const app = express();
 app.get('/', (req, res) => res.json({ secure: req.secure }));
@@ -152,10 +152,10 @@ To make dependencies that `require('express')` use rxpress, add an npm alias to 
 ```json
 {
   "dependencies": {
-    "express": "npm:@denerfernandes/rxpress@^0.1.0"
+    "express": "npm:@rxpress/rxpress@^0.1.0"
   },
   "overrides": {
-    "express": "npm:@denerfernandes/rxpress@^0.1.0"
+    "express": "npm:@rxpress/rxpress@^0.1.0"
   }
 }
 ```

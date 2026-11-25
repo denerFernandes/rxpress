@@ -1,3 +1,3 @@
-# @denerfernandes/rxpress-linux-arm64-musl
+# @rxpress/rxpress-linux-arm64-musl
 
-Prebuilt native addon of rxpress for `linux-arm64-musl`. Do not install directly; it is pulled in by `@denerfernandes/rxpress` as an optional dependency.
+Prebuilt native addon of rxpress for `linux-arm64-musl`. Do not install directly; it is pulled in by `@rxpress/rxpress` as an optional dependency.

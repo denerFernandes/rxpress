@@ -11,7 +11,7 @@ import rxpress, {
   serveStatic as rxServeStatic,
   text as rxText,
   urlencoded as rxUrlencoded,
-} from '@denerfernandes/rxpress';
+} from '@rxpress/rxpress';
 import { it } from 'vitest';
 
 export type E2ETarget = 'rxpress' | 'express';

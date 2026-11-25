@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [0.1.0] - 2026-11-25
 
-First release, published on npm as `@denerfernandes/rxpress` (the unscoped `rxpress` name belongs to another package); the binaries are `@denerfernandes/rxpress-<target>`.
+First release, published on npm as `@rxpress/rxpress` (the unscoped `rxpress` name belongs to another package); the binaries are `@rxpress/rxpress-<target>`.
 
 ### Added
 

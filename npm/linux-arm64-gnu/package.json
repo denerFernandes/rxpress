@@ -1,5 +1,5 @@
 {
-  "name": "@denerfernandes/rxpress-linux-arm64-gnu",
+  "name": "@rxpress/rxpress-linux-arm64-gnu",
   "version": "0.1.0",
   "description": "rxpress native addon for linux-arm64-gnu",
   "os": [
