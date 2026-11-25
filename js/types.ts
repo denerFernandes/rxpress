@@ -160,6 +160,12 @@ export interface ServerHandle extends EventEmitter {
   headersTimeout: number;
   requestTimeout: number;
   listening: boolean;
+  /**
+   * `net.Server.listen()`: the server is already listening, so this throws
+   * (`ERR_SERVER_ALREADY_LISTEN`), as Node does. It exists because libraries such as Socket.IO
+   * recognise a server by having it.
+   */
+  listen(...args: unknown[]): this;
 }
 
 /** @internal */
