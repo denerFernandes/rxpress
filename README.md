@@ -183,7 +183,7 @@ When the `app` receives Node's own `req`/`res` (mounted in a real Express app, a
 
 ### WebSockets and `'upgrade'`
 
-`server.on('upgrade', (req, socket, head) => ...)` works on the native server (the handle returned by `app.listen()` or the server from `http/https.createServer(app)`), so `ws` (`new WebSocketServer({ server })`), `express-ws` and similar packages work unchanged. With an `'upgrade'` listener, a request with `Connection: upgrade` + `Upgrade` leaves the engine: the TCP socket is handed to Node as a real `net.Socket` (no overhead from then on); over HTTPS the engine relays the decrypted traffic. Without listeners, the request is handled as a normal request (as in Node 24). Unix only (Linux/macOS).
+`server.on('upgrade', (req, socket, head) => ...)` works on the native server (the handle returned by `app.listen()` or the server from `http/https.createServer(app)`), so `ws` (`new WebSocketServer({ server })`), `express-ws` and similar packages work unchanged. With an `'upgrade'` listener, a request with `Connection: upgrade` + `Upgrade` leaves the engine: the TCP socket is handed to Node as a real `net.Socket` (no overhead from then on); over HTTPS the engine relays the decrypted traffic. Without listeners, the request is handled as a normal request (as in Node 24). Unix only (Linux/macOS): on Windows, an upgrade request is answered with `426 Upgrade Required` even when there is an `'upgrade'` listener.
 
 ### Views
 

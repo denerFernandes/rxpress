@@ -35,9 +35,6 @@ jobs:
   test:
     name: Test (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
-    # Windows: the engine's 'upgrade' hand-off is unix-only, so some e2e/tests are expected to
-    # fail there until it is implemented. Allow failure rather than claim it passes.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:

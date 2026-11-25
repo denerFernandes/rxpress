@@ -1116,7 +1116,9 @@ describe('Express 5 parity: views and defaults', () => {
   });
 });
 
-describe("'upgrade' hands the connection to Node as a real net.Socket", () => {
+// The hand-off gives Node the socket's file descriptor, which Node can only wrap on Unix
+// (documented in the README); on Windows an upgrade request with a listener gets a 426.
+describe.skipIf(process.platform === 'win32')("'upgrade' hands the connection to Node as a real net.Socket", () => {
   const http = require('node:http') as typeof import('node:http');
   const { createHash } = require('node:crypto') as typeof import('node:crypto');
   const net = require('node:net') as typeof import('node:net');
