@@ -19,8 +19,7 @@ use bytes::Bytes;
 use config::{EngineConfig, EtagMode};
 use crossbeam_queue::SegQueue;
 use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
-use napi::JsFunction;
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 use parking_lot::Mutex;
 use protocol::{build_simple_raw_response, is_valid_response_header, is_valid_status};
@@ -40,6 +39,15 @@ use stream::{CloseNotifier, StreamRegistry};
 use tls::TlsInput;
 use tokio::sync::Notify;
 use upgrade::Upgrades;
+
+/// A JS callback the engine calls from its own threads, with no arguments. The JS function is called
+/// directly (no error-first argument), and the queue is unbounded.
+type WakeCallback = ThreadsafeFunction<(), (), (), napi::Status, false, false, 0>;
+
+/// The wake-up callback shared by the engine threads that call it and by `close()`, `ref()` and
+/// `unref()`. napi 3's ThreadsafeFunction is not `Clone`, hence the `Arc`; `close()` empties the
+/// slot, which releases the function at once, and later wake-ups find nothing to call.
+type SharedWake = Arc<parking_lot::Mutex<Option<WakeCallback>>>;
 
 #[napi(object)]
 pub struct NativeServerConfig {
@@ -147,7 +155,7 @@ pub struct NativeServer {
     static_mounts: Vec<StaticMount>,
     body_rules: Vec<BodyRule>,
     lifecycle: ServerLifecycle,
-    tsfn: Option<ThreadsafeFunction<(), ErrorStrategy::Fatal>>,
+    tsfn: Option<SharedWake>,
 }
 
 impl Drop for NativeServer {
@@ -233,7 +241,7 @@ impl NativeServer {
         &mut self,
         host: String,
         port: u32,
-        on_wakeup: JsFunction,
+        on_wakeup: Function<(), ()>,
         tls: Option<NativeTlsConfig>,
     ) -> Result<NativeAddressInfo> {
         if self.lifecycle.running.is_some() {
@@ -247,13 +255,17 @@ impl NativeServer {
             compiled.insert(method, path, *route_id);
         }
 
-        let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> =
-            on_wakeup.create_threadsafe_function(0, |_ctx| Ok(Vec::<Unknown>::new()))?;
+        let tsfn: WakeCallback = on_wakeup
+            .build_threadsafe_function()
+            .callee_handled::<false>()
+            .build()?;
 
-        let tsfn_for_close = tsfn.clone();
-        let tsfn_arc = Arc::new(tsfn);
+        let shared_wake: SharedWake = Arc::new(parking_lot::Mutex::new(Some(tsfn)));
+        let tsfn_for_close = shared_wake.clone();
         let wakeup: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            let _ = tsfn_arc.call((), ThreadsafeFunctionCallMode::NonBlocking);
+            if let Some(tsfn) = shared_wake.lock().as_ref() {
+                let _ = tsfn.call((), ThreadsafeFunctionCallMode::NonBlocking);
+            }
         });
 
         let closed_streams = Arc::new(SegQueue::new());
@@ -488,9 +500,15 @@ impl NativeServer {
     }
 
     #[napi]
-    pub fn begin_close(&mut self, timeout_ms: Option<u32>, on_drained: JsFunction) -> Result<()> {
-        let tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal> =
-            on_drained.create_threadsafe_function(0, |_ctx| Ok(Vec::<Unknown>::new()))?;
+    pub fn begin_close(
+        &mut self,
+        timeout_ms: Option<u32>,
+        on_drained: Function<(), ()>,
+    ) -> Result<()> {
+        let tsfn: WakeCallback = on_drained
+            .build_threadsafe_function()
+            .callee_handled::<false>()
+            .build()?;
 
         let Some(ref running) = self.lifecycle.running else {
             let _ = tsfn.call((), ThreadsafeFunctionCallMode::NonBlocking);
@@ -536,8 +554,12 @@ impl NativeServer {
     #[napi]
     pub fn close(&mut self) {
         self.lifecycle.close();
-        if let Some(tsfn) = self.tsfn.take() {
-            let _ = tsfn.abort();
+        if let Some(shared) = self.tsfn.take() {
+            if let Some(tsfn) = shared.lock().take() {
+                // Releases the function now instead of when the last reference goes.
+                #[allow(deprecated)]
+                let _ = tsfn.abort();
+            }
         }
     }
 
@@ -548,15 +570,22 @@ impl NativeServer {
 
     #[napi]
     pub fn refer(&mut self, env: Env) {
-        if let Some(ref mut tsfn) = self.tsfn {
-            let _ = tsfn.refer(&env);
+        if let Some(ref shared) = self.tsfn {
+            if let Some(tsfn) = shared.lock().as_mut() {
+                // napi 3 only offers these for a function that is not shared; this one is.
+                #[allow(deprecated)]
+                let _ = tsfn.refer(&env);
+            }
         }
     }
 
     #[napi]
     pub fn unref(&mut self, env: Env) {
-        if let Some(ref mut tsfn) = self.tsfn {
-            let _ = tsfn.unref(&env);
+        if let Some(ref shared) = self.tsfn {
+            if let Some(tsfn) = shared.lock().as_mut() {
+                #[allow(deprecated)]
+                let _ = tsfn.unref(&env);
+            }
         }
     }
 }
