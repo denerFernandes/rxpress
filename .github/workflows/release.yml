@@ -19,7 +19,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Tag matches package version
         run: |
           test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}" \
@@ -68,7 +68,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             os: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -113,7 +113,7 @@ jobs:
       contents: read
       id-token: write # npm provenance
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -177,7 +177,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Create the release from the changelog
         env:
           GH_TOKEN: ${{ github.token }}
