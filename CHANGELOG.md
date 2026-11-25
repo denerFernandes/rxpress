@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-25
+
 ### Changed
 
 - The engine's I/O runtime uses one thread by default (it used up to four). Per request it uses 37-51% less CPU than Express 5 on dynamic routes (was ~7%), at the cost of peak pipelined throughput; `app.set('ioThreads', n)` or `RXPRESS_IO_THREADS` raise it (the runtime is created once per process).

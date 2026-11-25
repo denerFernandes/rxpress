@@ -1,6 +1,6 @@
 {
   "name": "@rxpress/rxpress-linux-arm64-musl",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "rxpress native addon for linux-arm64-musl",
   "os": [
     "linux"

@@ -6,29 +6,15 @@ HTTP/HTTPS server for Node.js with the networking engine written in Rust (N-API)
 
 rxpress exists to run an Express 5 application with **less memory and less CPU**. The networking (HTTP parsing, TLS, static files, body limits, routing of static paths) runs in Rust, so the JavaScript side only does the work your handlers ask for: fewer allocations per request, less garbage for V8 to collect and fewer cycles spent on protocol work.
 
-Performance is a consequence of that, not the goal: when every request costs less CPU, the same machine serves more of them. The numbers are in [Resource usage](#resource-usage-versus-express-5); the throughput tables come after them.
+Performance is a consequence of that, not the goal: when every request costs less CPU, the same machine serves more of them. Against Express 5, running the same app under the same load:
 
-## Installation
+| | Express 5 | **rxpress** | |
+| --- | ---: | ---: | ---: |
+| **Memory at peak load** | 189 MB | **88 MB** | **54% less** |
+| **CPU per request** (dynamic routes) | 22-30 µs | **13-15 µs** | **37-51% less** |
+| **CPU per request** (static files) | 109 µs | **8 µs** | **92% less** |
 
-```bash
-npm install @rxpress/rxpress
-```
-
-The native binary ships in per-platform packages (`@rxpress/rxpress-<target>`) installed automatically as `optionalDependencies`; npm only downloads the one for your machine. Do not use `--omit=optional`/`--no-optional`. Requires Node.js >= 22.
-
-| Target | Package |
-| --- | --- |
-| macOS Apple Silicon | `@rxpress/rxpress-darwin-arm64` |
-| macOS Intel | `@rxpress/rxpress-darwin-x64` |
-| Linux x64 (glibc) | `@rxpress/rxpress-linux-x64-gnu` |
-| Linux x64 (musl/Alpine) | `@rxpress/rxpress-linux-x64-musl` |
-| Linux arm64 (glibc) | `@rxpress/rxpress-linux-arm64-gnu` |
-| Linux arm64 (musl/Alpine) | `@rxpress/rxpress-linux-arm64-musl` |
-| Windows x64 | `@rxpress/rxpress-win32-x64-msvc` |
-
-If no binary loads, the error names the expected package. In a clone of the repository, `npm run build:native` produces `native/rxpress.node`, which takes precedence over the platform packages.
-
-**Windows:** the `'upgrade'` event (WebSocket) is not supported yet, because handing the socket over to JS is Unix-only. Everything else behaves the same, and the Windows test job is part of CI like the other platforms.
+Method, every scenario and the caveats are in [Resource usage](#resource-usage-versus-express-5). The throughput tables come after them, as the consequence.
 
 ## Resource usage versus Express 5
 
@@ -74,7 +60,31 @@ The engine's Tokio runtime uses **one I/O thread by default**. Threads that hand
 
 Raise it when you want peak throughput (the pipelined tables below use 4), or for TLS or static-file-heavy servers on multi-core machines, where the Rust side does real work.
 
-## Benchmarks (Apple M1 Pro, Node.js v24, same 45-route API)
+## Installation
+
+```bash
+npm install @rxpress/rxpress
+```
+
+The native binary ships in per-platform packages (`@rxpress/rxpress-<target>`) installed automatically as `optionalDependencies`; npm only downloads the one for your machine. Do not use `--omit=optional`/`--no-optional`. Requires Node.js >= 22.
+
+| Target | Package |
+| --- | --- |
+| macOS Apple Silicon | `@rxpress/rxpress-darwin-arm64` |
+| macOS Intel | `@rxpress/rxpress-darwin-x64` |
+| Linux x64 (glibc) | `@rxpress/rxpress-linux-x64-gnu` |
+| Linux x64 (musl/Alpine) | `@rxpress/rxpress-linux-x64-musl` |
+| Linux arm64 (glibc) | `@rxpress/rxpress-linux-arm64-gnu` |
+| Linux arm64 (musl/Alpine) | `@rxpress/rxpress-linux-arm64-musl` |
+| Windows x64 | `@rxpress/rxpress-win32-x64-msvc` |
+
+If no binary loads, the error names the expected package. In a clone of the repository, `npm run build:native` produces `native/rxpress.node`, which takes precedence over the platform packages.
+
+**Windows:** the `'upgrade'` event (WebSocket) is not supported yet, because handing the socket over to JS is Unix-only. Everything else behaves the same, and the Windows test job is part of CI like the other platforms.
+
+## Throughput (a consequence of the above)
+
+Apple M1 Pro, Node.js v24, same 45-route API.
 
 > **These numbers are a reference, not a promise.** They measure the server itself on minimal handlers. In a real application, throughput and latency are dominated by everything around the server: your dependencies and middleware, business logic, database and cache access, calls to other services, payload sizes and the hardware you deploy on. Expect the gain to be much smaller once that work is included, and measure with your own application before drawing conclusions.
 
@@ -85,6 +95,9 @@ npm run build && node bench/run.mjs
 ```
 
 These throughput tables use `ioThreads: 4` for rxpress (the default is 1, see above); `npm run bench` sets it for you.
+
+<details>
+<summary>Throughput tables (pipelined and plain keep-alive, 6 scenarios)</summary>
 
 ### 1. Peak throughput (`wrk -t4 -c128`, HTTP/1.1 pipeline depth 10)
 
@@ -109,6 +122,8 @@ These throughput tables use `ioThreads: 4` for rxpress (the default is 1, see ab
 | `GET /cors` (real `cors` middleware) | 34,154 req/s | **151,068 req/s** | **4.42x** |
 | `GET /static/sample.json` (`express.static`) | 13,876 req/s | **123,779 req/s** | **8.92x** |
 | **Average** | — | — | **5.23x** |
+
+</details>
 
 ## Architecture
 
