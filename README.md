@@ -12,12 +12,12 @@ rxpress exists to run an Express 5 application with **less memory and less CPU**
 
 Performance is a consequence of that, not the goal: when every request costs less CPU, the same machine serves more of them. Against Express 5, running the same app under the same load (median of 5 runs, details below):
 
-| | macOS (Apple M1 Pro) | Linux (cloud VM, Debian 12) |
+| | macOS (Apple M1 Pro) | Linux (GCP `c3-standard-8`, Ubuntu 24.04) |
 | --- | ---: | ---: |
-| **CPU per request**, dynamic routes | **37-51% less** | **12-66% less** (41-47% on plain GETs) |
+| **CPU per request**, dynamic routes | **37-51% less** | **82-87% less** |
 | **CPU per request**, static files | **92% less** | **97% less** |
-| **Memory at peak load** | **54% less** | **11% less** |
-| Idle memory | about the same | 9% more |
+| **Memory at peak load** | **54% less** | **34% less** |
+| Idle memory | about the same | 14% more |
 
 CPU per request is the consistent result. The memory saving is real but depends on how hard the server is pushed (see [Resource usage](#resource-usage-versus-express-5)). The throughput tables come after, as the consequence.
 
@@ -48,28 +48,37 @@ Throughput in the same runs (requests per second, Express 5 -> rxpress): `/ping`
 
 ### The same comparison on Linux
 
-Debian 12, kernel 6.1, a 6-vCPU AMD EPYC cloud VM (the benchmark was pinned to 4 of them, at low priority, because other services run on it), Node.js v24, Express 5.3.0, rxpress 0.1.1 from npm, `wrk -t4 -c64` (512 connections in the last row), 8 s per scenario, median of 5 runs. The VM is slow at loopback TCP (a plain `node:http` hello-world serves about 7,600 req/s on it), so the absolute numbers are far lower than on the Mac; compare the two columns, not the machines.
+Ubuntu 24.04 LTS, Linux 7.0, a dedicated GCP `c3-standard-8` VM (8 vCPUs Intel Xeon Platinum 8481C @ 2.70 GHz, 32 GB RAM), Node.js v22.23.5, Express 5, `wrk -t4 -c64` (512 connections in the last row), 8 s per scenario, median of 5 runs (`RUNS=5 npm run bench:resources`, `ioThreads: 1`).
+
+**Memory (RSS), Linux**
+
+| | Express 5 | **rxpress** | |
+| --- | ---: | ---: | ---: |
+| Idle | 65 MB | **74 MB** | 14% more (Node + native library) |
+| Peak under load | 184 MB | **122 MB** | **34% less** |
+
+**CPU per request, Linux**
 
 | Scenario | Express 5 | **rxpress** | CPU saved |
 | --- | ---: | ---: | ---: |
-| `GET /ping` (plain text) | 246.7 µs | **130.2 µs** | **47%** |
-| `GET /json` (JSON API) | 196.9 µs | **117.0 µs** | **41%** |
-| `GET /users/:id/posts/:postId?sort=desc` | 204.6 µs | **180.5 µs** | **12%** |
-| `POST /echo` (`express.json()`) | 339.9 µs | **116.8 µs** | **66%** |
-| `GET /cors` (real `cors` middleware) | 224.2 µs | **140.5 µs** | **37%** |
-| `GET /static/sample.json` (`express.static`) | 1403.5 µs | **37.1 µs** | **97%** |
-| `GET /json`, 512 connections | 208.5 µs | **86.8 µs** | **58%** |
+| `GET /ping` (plain text) | 80.7 µs | **10.2 µs** | **87%** |
+| `GET /json` (JSON API) | 74.8 µs | **10.6 µs** | **86%** |
+| `GET /users/:id/posts/:postId?sort=desc` | 76.2 µs | **14.0 µs** | **82%** |
+| `POST /echo` (`express.json()`) | 92.2 µs | **13.2 µs** | **86%** |
+| `GET /cors` (real `cors` middleware) | 77.2 µs | **12.5 µs** | **84%** |
+| `GET /static/sample.json` (`express.static`) | 180.9 µs | **5.6 µs** | **97%** |
+| `GET /json`, 512 connections | 79.3 µs | **10.6 µs** | **87%** |
 
-Requests per second, Express 5 -> rxpress: `/ping` 4,449 -> 8,673; `/json` 5,027 -> 9,329; params 4,899 -> 6,015; `POST /echo` 3,207 -> 9,171; `/cors` 4,473 -> 8,205; static 971 -> 24,693; `/json` with 512 connections 5,022 -> 14,288.
+Throughput in the same runs (requests per second, Express 5 -> rxpress): `/ping` 14,688 -> 132,946; `/json` 15,762 -> 128,857; params 15,353 -> 116,628; `POST /echo` 12,824 -> 122,078; `/cors` 15,010 -> 126,086; static 7,212 -> 178,585; `/json` with 512 connections 14,865 -> 126,109.
 
-Memory on Linux: idle 67 MB (Express) versus 73 MB (rxpress, which also maps the native library); peak under load 121 MB versus 107 MB, **11% less**.
+In a 15-minute mixed-traffic soak test on the same VM (`SOAK_MINUTES=15 npm run bench:soak`: 32 concurrent loops, TLS enabled, ~1.65M requests including uploads, pipelining, errors and aborted SSE streams), rxpress completed with **0 client errors**, JS heap flat at 7.2–7.4 MB, RSS growth of **4.3%** after warm-up (limit 15%) and **-1** file-descriptor change (**PASS**).
 
 What these numbers do and do not say:
 
-- **Memory depends on the load.** Idle memory is about the same, since a Node process starts at around 60-70 MB either way. Under saturating load on the Mac, Express handled about 40,000 requests per second and its heap grew to ~190 MB, while rxpress stayed around 90 MB (54% less). On the slower Linux VM Express only handled about 5,000 requests per second, produced far less garbage per second, and the gap shrank to 11%. The less garbage each request leaves behind, the more the heap of a busy server stays small; at low request rates there is little difference to see.
-- **CPU per request is the consistent result:** 37-51% lower on dynamic routes on the Mac and 12-66% on Linux (the params route is the weakest, 12% there against 37% on the Mac), and 92-97% lower on static files. It is not 50% on every route.
+- **Memory depends on the load.** Idle memory is about the same, since a Node process starts at around 60-74 MB either way. Under saturating load, Express's heap grew to ~184–189 MB while rxpress stayed at 88 MB on macOS (54% less) and 122 MB on Linux (34% less). The less garbage each request leaves behind, the more the heap of a busy server stays small; at low request rates there is little difference to see.
+- **CPU per request is the consistent result:** 37-51% lower on dynamic routes on macOS and 82-87% lower on Linux x86_64, and 92-97% lower on static files.
 - They measure the server on minimal handlers. In a real application your code, middleware, database and network calls dominate, and the saving shrinks accordingly. Measure with your own application.
-- The macOS numbers were taken on a laptop that was running other programs (load average around 10 on 10 cores) and the Linux ones on a shared VM, hence the median of several runs; absolute numbers will differ on your hardware. Reproduce them with `npm run build && RUNS=5 npm run bench:resources` (requires `wrk`).
+- The macOS numbers were taken on a laptop running other programs and the Linux ones on a dedicated cloud VM, using the median of 5 runs; absolute numbers will differ on your hardware. Reproduce them with `npm run build && RUNS=5 npm run bench:resources` (requires `wrk`).
 
 ### `ioThreads`: CPU versus peak throughput
 
@@ -107,20 +116,48 @@ If no binary loads, the error names the expected package. In a clone of the repo
 
 ## Throughput (a consequence of the above)
 
-Apple M1 Pro, Node.js v24, same 45-route API.
+Same 45-route API, measured on macOS (Apple M1 Pro, Node.js v24) and Linux (GCP `c3-standard-8`, Ubuntu 24.04 LTS, Node.js v22.23.5).
 
 > **These numbers are a reference, not a promise.** They measure the server itself on minimal handlers. In a real application, throughput and latency are dominated by everything around the server: your dependencies and middleware, business logic, database and cache access, calls to other services, payload sizes and the hardware you deploy on. Expect the gain to be much smaller once that work is included, and measure with your own application before drawing conclusions.
 
-Measured on a single machine and not reproduced on other hardware; absolute numbers depend on the CPU. Command used (requires `wrk`):
+Absolute numbers depend on the CPU. Commands used (requires `wrk`):
 
 ```bash
-npm run build && node bench/run.mjs
+npm run build && node bench/run.mjs     # Express 5 vs rxpress
+npm run build && node bench/run-all.mjs # Express 5 vs Fastify vs rxpress
 ```
 
-These throughput tables use `ioThreads: 4` for rxpress (the default is 1, see above); `npm run bench` sets it for you.
+These throughput tables use `ioThreads: 4` for rxpress (the default is 1, see above); `npm run bench` and `bench/run-all.mjs` set it for you.
 
 <details>
-<summary>Throughput tables (pipelined and plain keep-alive, 6 scenarios)</summary>
+<summary>Linux throughput tables — GCP c3-standard-8 (Express 5 vs Fastify vs rxpress)</summary>
+
+### 1. Peak throughput (`wrk -t4 -c128`, HTTP/1.1 pipeline depth 10)
+
+| Scenario | Express 5 | Fastify | **rxpress** | rx / Express | rx / Fastify |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `GET /ping` (plain text) | 16,892 req/s | 84,724 req/s | **689,964 req/s** | **40.85x** | **8.14x** |
+| `GET /json` (JSON API) | 17,264 req/s | 91,428 req/s | **586,193 req/s** | **33.96x** | **6.41x** |
+| `GET /users/:id/posts/:postId?sort=desc` | 16,102 req/s | 86,387 req/s | **247,100 req/s** | **15.35x** | **2.86x** |
+| `POST /echo` (`express.json()`) | 12,461 req/s | 59,231 req/s | **271,038 req/s** | **21.75x** | **4.58x** |
+| `GET /cors` (real `cors` middleware) | 16,271 req/s | 81,868 req/s | **313,963 req/s** | **19.30x** | **3.83x** |
+| `GET /static/sample.json` (`express.static`) | 6,951 req/s | 12,418 req/s | **2,523,045 req/s** | **362.98x** | **203.17x** |
+
+### 2. Plain keep-alive (`wrk -t4 -c128`, no pipelining)
+
+| Scenario | Express 5 | Fastify | **rxpress** | rx / Express | rx / Fastify |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `GET /ping` (plain text) | 14,959 req/s | 54,551 req/s | **347,362 req/s** | **23.22x** | **6.37x** |
+| `GET /json` (JSON API) | 15,074 req/s | 62,298 req/s | **351,777 req/s** | **23.34x** | **5.65x** |
+| `GET /users/:id/posts/:postId?sort=desc` | 14,550 req/s | 60,578 req/s | **198,450 req/s** | **13.64x** | **3.28x** |
+| `POST /echo` (`express.json()`) | 11,547 req/s | 49,986 req/s | **212,641 req/s** | **18.42x** | **4.25x** |
+| `GET /cors` (real `cors` middleware) | 13,282 req/s | 63,498 req/s | **233,596 req/s** | **17.59x** | **3.68x** |
+| `GET /static/sample.json` (`express.static`) | 7,915 req/s | 12,632 req/s | **486,804 req/s** | **61.50x** | **38.54x** |
+
+</details>
+
+<details>
+<summary>macOS throughput tables — Apple M1 Pro (pipelined and plain keep-alive, 6 scenarios)</summary>
 
 ### 1. Peak throughput (`wrk -t4 -c128`, HTTP/1.1 pipeline depth 10)
 
