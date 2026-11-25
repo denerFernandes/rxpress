@@ -14,7 +14,10 @@ import { fileURLToPath } from 'node:url';
 const file = fileURLToPath(new URL('../dist/index.d.cts', import.meta.url));
 const src = readFileSync(file, 'utf8');
 
-const exportRe = /\n\/\/ @ts-ignore\nexport = rxpress;\nexport \{([^}]*)\};\s*$/;
+// The tail is `export = rxpress;` followed by the named exports. tsup 8 puts them in one
+// `export { a, type B }`; tsup 9 splits them into `export { a }` and `export type { B }`.
+const exportRe =
+  /\n\/\/ @ts-ignore\nexport = rxpress;\nexport \{([^}]*)\};(?:\nexport type \{([^}]*)\};)?\s*$/;
 const m = exportRe.exec(src);
 if (!m) {
   if (src.includes('declare namespace rxpress')) process.exit(0); // already rewritten
@@ -22,7 +25,10 @@ if (!m) {
 }
 
 const body = src.slice(0, m.index).replace(/\ndeclare const rxpress: RxpressFactory;\n/, '\n');
-const entries = m[1].split(',').map((s) => s.trim()).filter(Boolean);
+const entries = [
+  ...m[1].split(',').map((s) => s.trim()).filter(Boolean),
+  ...(m[2] ?? '').split(',').map((s) => s.trim()).filter(Boolean).map((name) => `type ${name}`),
+];
 
 // Factory-object members whose runtime value differs from the same-named export.
 const MEMBER_VALUE = {
