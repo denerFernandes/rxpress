@@ -305,11 +305,11 @@ When the `app` receives Node's own `req`/`res` (mounted in a real Express app, a
 
 ### Known limitations of the native server
 
-- `'connection'` listeners on the server are not called (the engine owns the sockets). `'request'` listeners are: see [Libraries tested](#libraries-tested-on-rxpress).
-- `listen()` on a UNIX socket is not supported.
-- `req.socket.remotePort` is `undefined`.
-- `req`/`res` are not `instanceof http.IncomingMessage`/`ServerResponse`.
-- When a client closes its side of the connection (FIN) while a handler is still running, the engine gives the handler 100 ms to answer before treating the request as aborted; Node aborts at once. A `res.sendFile(path, cb)` that finishes in that window calls `cb()` without the `ECONNABORTED` error Express would pass (this is the Express test that fails). The callback is also called once the file is handed to the engine, not when the last byte is written.
+- **`'connection'` listeners are not called, and `server.getConnections()` reports 0.** The engine owns the TCP sockets and JavaScript only sees requests, so there is no `net.Socket` per connection to hand out. Libraries that track sockets in order to close them at shutdown (`http-terminator`, `stoppable`, `server-destroy`) therefore see none. What to use instead: `server.close()` stops accepting, lets in-flight requests finish and then closes the connections, forcing the rest after `shutdownTimeoutMs`; `server.closeIdleConnections()` and `server.closeAllConnections()` work; and each request has its connection's details on `req.socket` (`remoteAddress`, `remotePort`, `remoteFamily`, `encrypted`). `'request'` and `'upgrade'` listeners are called as in Node.
+- **`listen()` on a UNIX socket is not supported.**
+- **`req` and `res` are not subclasses of `http.IncomingMessage` and `http.ServerResponse`.** `instanceof` checks against those two classes are true, so guards such as `req instanceof http.IncomingMessage` pass, but a check on the prototype chain (`Object.getPrototypeOf(req) === http.IncomingMessage.prototype`) does not. This works by teaching the two Node classes to recognise rxpress's objects, which is a global change made on import, like the `http.createServer` interception; subclasses of the Node classes are not affected.
+- **A client that closes its side of the connection** (FIN) while a handler is still running gets 100 ms to be answered before the request is treated as aborted; Node aborts at once. A `res.sendFile(path, cb)` that finishes in that window calls `cb()` without the `ECONNABORTED` error Express would pass (this is the one Express test that fails). The callback is also called once the file is handed to the engine, not when the last byte is written.
+- `req.socket.remotePort` is `undefined` for a request that reached an rxpress app through the Node bridge (the app mounted in a real Express app, or called from a plain `http.Server`): there the engine only learns the forwarded address, not the client's port.
 
 ## Scripts
 

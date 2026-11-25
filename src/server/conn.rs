@@ -102,11 +102,18 @@ pub(super) struct Batch {
     pub(super) pump_err: Option<PumpError>,
 }
 
+/// The client end of a connection.
+#[derive(Clone)]
+pub(super) struct Peer {
+    pub(super) ip: Arc<str>,
+    pub(super) port: u16,
+}
+
 /// Per-connection state.
 pub(super) struct Conn<'c, 'a, S> {
     pub(super) stream: &'c mut S,
     pub(super) shared: &'c Arc<ServerShared>,
-    pub(super) peer_ip: Arc<str>,
+    pub(super) peer: Peer,
     pub(super) is_tls: bool,
     pub(super) bus: &'c ShutdownBus,
     pub(super) shard: &'a Notify,
@@ -141,7 +148,7 @@ pub(super) struct Conn<'c, 'a, S> {
 pub(super) async fn handle_connection<'a, S: ConnStream>(
     stream: S,
     shared: Arc<ServerShared>,
-    peer_ip: Arc<str>,
+    peer: Peer,
     is_tls: bool,
     shutdown_bus: &ShutdownBus,
     shutdown_shard: &'a Notify,
@@ -156,7 +163,7 @@ pub(super) async fn handle_connection<'a, S: ConnStream>(
             handle_connection_inner(
                 &mut stream,
                 &shared,
-                peer_ip,
+                peer,
                 is_tls,
                 shutdown_bus,
                 shutdown_shard,
@@ -204,7 +211,7 @@ async fn lingering_close<S: ConnStream>(stream: &mut S) {
 async fn handle_connection_inner<'a, S: ConnStream>(
     stream: &mut S,
     shared: &Arc<ServerShared>,
-    peer_ip: Arc<str>,
+    peer: Peer,
     is_tls: bool,
     shutdown_bus: &ShutdownBus,
     shutdown_shard: &'a Notify,
@@ -221,7 +228,7 @@ async fn handle_connection_inner<'a, S: ConnStream>(
     let mut conn = Conn {
         stream,
         shared,
-        peer_ip,
+        peer,
         is_tls,
         bus: shutdown_bus,
         shard: shutdown_shard,

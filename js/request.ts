@@ -128,6 +128,8 @@ export class RxRequest {
   /** @internal */ private _originalUrl: string | null = null;
   /** @internal */ private _path: string | null = null;
   /** @internal */ private _remoteAddr: string | null = null;
+  /** @internal The bridge forwards only the address; the loopback port would be wrong. */
+  private _remotePortUnknown = false;
   /** @internal */ private _params: Record<string, string> | null = null;
   /** @internal */ private _headers: IncomingHttpHeaders | null = null;
   /** @internal */ private _rawHeaders: string[] | null = null;
@@ -236,6 +238,7 @@ export class RxRequest {
     this._originalUrl = null;
     this._path = null;
     this._remoteAddr = null;
+    this._remotePortUnknown = false;
     this._params = null;
     this._headers = null;
     this._rawHeaders = null;
@@ -276,6 +279,7 @@ export class RxRequest {
     if (originalUrl) this._originalUrl = originalUrl;
     this.baseUrl = baseUrl;
     this._remoteAddr = peer;
+    this._remotePortUnknown = true;
     this._isTls = tls;
     this._bridgeNext = hasNext;
   }
@@ -400,6 +404,12 @@ export class RxRequest {
   }
 
   public header(name: string): string | undefined { return this.get(name); }
+
+  /** @internal The client's TCP port: the two bytes after the address in the request record. */
+  public _getRemotePort(): number | undefined {
+    if (this._remotePortUnknown || this._remoteEnd + 2 > this._buf.length) return undefined;
+    return this._buf.readUInt16LE(this._remoteEnd);
+  }
 
   /** @internal */
   public _getRemoteAddr(): string {
