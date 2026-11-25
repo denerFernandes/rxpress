@@ -12,6 +12,7 @@
 //                the median; use 5 or more, a single run is noisy on a busy machine
 //   IO_THREADS=n run rxpress with `ioThreads: n` (default: the engine's default)
 import { spawn, execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +33,15 @@ const scenarios = [
 
 /** RSS (MB) and accumulated CPU time (s) of a process. */
 function usage(pid) {
+  if (process.platform === 'linux') {
+    // /proc has 10 ms resolution; `ps` only reports whole seconds on Linux.
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    const ticks = Number(fields[11]) + Number(fields[12]); // utime + stime
+    const clock = Number(execFileSync('getconf', ['CLK_TCK']).toString());
+    const pages = Number(readFileSync(`/proc/${pid}/statm`, 'utf8').split(' ')[1]);
+    return { rssMb: (pages * 4096) / 1048576, cpu: ticks / clock };
+  }
   const [rss, cpu] = execFileSync('ps', ['-o', 'rss=,cputime=', '-p', String(pid)])
     .toString()
     .trim()

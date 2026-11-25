@@ -6,28 +6,29 @@ HTTP/HTTPS server for Node.js with the networking engine written in Rust (N-API)
 
 rxpress exists to run an Express 5 application with **less memory and less CPU**. The networking (HTTP parsing, TLS, static files, body limits, routing of static paths) runs in Rust, so the JavaScript side only does the work your handlers ask for: fewer allocations per request, less garbage for V8 to collect and fewer cycles spent on protocol work.
 
-Performance is a consequence of that, not the goal: when every request costs less CPU, the same machine serves more of them. Against Express 5, running the same app under the same load:
+Performance is a consequence of that, not the goal: when every request costs less CPU, the same machine serves more of them. Against Express 5, running the same app under the same load (median of 5 runs, details below):
 
-| | Express 5 | **rxpress** | |
-| --- | ---: | ---: | ---: |
-| **Memory at peak load** | 189 MB | **88 MB** | **54% less** |
-| **CPU per request** (dynamic routes) | 22-30 µs | **13-15 µs** | **37-51% less** |
-| **CPU per request** (static files) | 109 µs | **8 µs** | **92% less** |
+| | macOS (Apple M1 Pro) | Linux (cloud VM, Debian 12) |
+| --- | ---: | ---: |
+| **CPU per request**, dynamic routes | **37-51% less** | **12-66% less** (41-47% on plain GETs) |
+| **CPU per request**, static files | **92% less** | **97% less** |
+| **Memory at peak load** | **54% less** | **11% less** |
+| Idle memory | about the same | 9% more |
 
-Method, every scenario and the caveats are in [Resource usage](#resource-usage-versus-express-5). The throughput tables come after them, as the consequence.
+CPU per request is the consistent result. The memory saving is real but depends on how hard the server is pushed (see [Resource usage](#resource-usage-versus-express-5)). The throughput tables come after, as the consequence.
 
 ## Resource usage versus Express 5
 
 Same 45-route app on both servers, each in its own process, under the same `wrk` load (`-t4 -c64`; the last row uses 512 connections). Memory is the RSS of the whole process and CPU is the CPU time of the whole process, Rust threads included; **CPU per request** is that CPU time divided by the requests served, so it does not depend on how many requests per second each server manages. Median of 5 runs, 6 s of load per scenario, Node.js v24, Apple M1 Pro.
 
-**Memory (RSS)**
+**Memory (RSS), macOS**
 
 | | Express 5 | **rxpress** | |
 | --- | ---: | ---: | ---: |
 | Idle | 64 MB | **60 MB** | about the same (Node itself is most of it) |
 | Peak under load | 189 MB | **88 MB** | **54% less** |
 
-**CPU per request**
+**CPU per request, macOS**
 
 | Scenario | Express 5 | **rxpress** | CPU saved |
 | --- | ---: | ---: | ---: |
@@ -41,12 +42,30 @@ Same 45-route app on both servers, each in its own process, under the same `wrk`
 
 Throughput in the same runs (requests per second, Express 5 -> rxpress): `/ping` 42,429 -> 98,431; `/json` 44,592 -> 101,062; params 41,070 -> 95,031; `POST /echo` 33,221 -> 98,025; `/cors` 41,598 -> 94,326; static 16,698 -> 114,149; `/json` with 512 connections 38,099 -> 93,652.
 
+### The same comparison on Linux
+
+Debian 12, kernel 6.1, a 6-vCPU AMD EPYC cloud VM (the benchmark was pinned to 4 of them, at low priority, because other services run on it), Node.js v24, Express 5.3.0, rxpress 0.1.1 from npm, `wrk -t4 -c64` (512 connections in the last row), 8 s per scenario, median of 5 runs. The VM is slow at loopback TCP (a plain `node:http` hello-world serves about 7,600 req/s on it), so the absolute numbers are far lower than on the Mac; compare the two columns, not the machines.
+
+| Scenario | Express 5 | **rxpress** | CPU saved |
+| --- | ---: | ---: | ---: |
+| `GET /ping` (plain text) | 246.7 µs | **130.2 µs** | **47%** |
+| `GET /json` (JSON API) | 196.9 µs | **117.0 µs** | **41%** |
+| `GET /users/:id/posts/:postId?sort=desc` | 204.6 µs | **180.5 µs** | **12%** |
+| `POST /echo` (`express.json()`) | 339.9 µs | **116.8 µs** | **66%** |
+| `GET /cors` (real `cors` middleware) | 224.2 µs | **140.5 µs** | **37%** |
+| `GET /static/sample.json` (`express.static`) | 1403.5 µs | **37.1 µs** | **97%** |
+| `GET /json`, 512 connections | 208.5 µs | **86.8 µs** | **58%** |
+
+Requests per second, Express 5 -> rxpress: `/ping` 4,449 -> 8,673; `/json` 5,027 -> 9,329; params 4,899 -> 6,015; `POST /echo` 3,207 -> 9,171; `/cors` 4,473 -> 8,205; static 971 -> 24,693; `/json` with 512 connections 5,022 -> 14,288.
+
+Memory on Linux: idle 67 MB (Express) versus 73 MB (rxpress, which also maps the native library); peak under load 121 MB versus 107 MB, **11% less**.
+
 What these numbers do and do not say:
 
-- Memory under load is about half; **idle memory is not**, since a Node process starts at around 60 MB either way. The difference comes from how much garbage each request leaves behind: Express's heap grew to ~190 MB under load, rxpress's stayed around 90 MB.
-- CPU per request is 37-51% lower on dynamic routes, not 50% on all of them, and 92% lower on static files.
+- **Memory depends on the load.** Idle memory is about the same, since a Node process starts at around 60-70 MB either way. Under saturating load on the Mac, Express handled about 40,000 requests per second and its heap grew to ~190 MB, while rxpress stayed around 90 MB (54% less). On the slower Linux VM Express only handled about 5,000 requests per second, produced far less garbage per second, and the gap shrank to 11%. The less garbage each request leaves behind, the more the heap of a busy server stays small; at low request rates there is little difference to see.
+- **CPU per request is the consistent result:** 37-51% lower on dynamic routes on the Mac and 12-66% on Linux (the params route is the weakest, 12% there against 37% on the Mac), and 92-97% lower on static files. It is not 50% on every route.
 - They measure the server on minimal handlers. In a real application your code, middleware, database and network calls dominate, and the saving shrinks accordingly. Measure with your own application.
-- They were taken on a laptop that was running other programs (load average around 10 on 10 cores), hence the median of several runs; absolute numbers will differ on your hardware. Reproduce them with `npm run build && RUNS=5 npm run bench:resources` (requires `wrk`).
+- The macOS numbers were taken on a laptop that was running other programs (load average around 10 on 10 cores) and the Linux ones on a shared VM, hence the median of several runs; absolute numbers will differ on your hardware. Reproduce them with `npm run build && RUNS=5 npm run bench:resources` (requires `wrk`).
 
 ### `ioThreads`: CPU versus peak throughput
 

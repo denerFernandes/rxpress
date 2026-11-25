@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+
+- README: add the Linux measurements and say plainly that CPU per request is the consistent saving (12-66% on Linux, 37-51% on macOS) while the memory saving depends on the request rate (11% on Linux, 54% on macOS under heavy load).
+- `npm run bench:resources` reads CPU time from `/proc` on Linux (`ps` only reports whole seconds there).
+
 ## [0.1.1] - 2026-11-25
 
 ### Changed
