@@ -149,7 +149,7 @@ export function platformTriple(
 
 /** Name of the optional dependency that carries the binary for `triple`. */
 export function platformPackageName(triple: string = platformTriple()): string {
-  return `rxpress-${triple}`;
+  return `@denerfernandes/rxpress-${triple}`;
 }
 
 export function loadNativeAddon(): NativeAddon {

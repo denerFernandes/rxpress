@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-25
+
+First release, published on npm as `@denerfernandes/rxpress` (the unscoped `rxpress` name belongs to another package); the binaries are `@denerfernandes/rxpress-<target>`.
+
 ### Added
 
 - HTTP/1.1 engine in Rust (N-API, tokio) with a lock-free queue, batched draining and lazy parsing of `req.headers`, `req.query`, `req.params`, `req.cookies` and `req.body`.

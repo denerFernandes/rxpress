@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import { afterEach, describe, expect } from 'vitest';
 import { createTempWorkspace, setupConsumerPackage, type TempWorkspace } from './helpers/fixtures.js';
@@ -718,7 +718,7 @@ app.use(errorHandler);
       const esmScript = consumerWs.writeFile(
         'cwd-esm.mjs',
         `
-import rxpress from ${JSON.stringify(distMjs)};
+import rxpress from ${JSON.stringify(pathToFileURL(distMjs).href)};
 
 const app = rxpress();
 app.get('/health', (_req, res) => res.json({ status: 'ok', cwd: process.cwd() }));

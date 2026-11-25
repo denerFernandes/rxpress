@@ -254,7 +254,9 @@ describe('Streaming, Chunked Transfer & Server-Sent Events (SSE)', () => {
             break;
           }
           if (i % 8 === 7) {
-            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+            // setImmediate, not setTimeout(0): Windows timers tick every ~15 ms, which would let
+            // the paused client resume before the connection fills.
+            await new Promise<void>((resolve) => setImmediate(resolve));
           }
         }
         res.write('TAIL');
@@ -268,7 +270,9 @@ describe('Streaming, Chunked Transfer & Server-Sent Events (SSE)', () => {
       const hdrBuf = await client.readUntil('\r\n\r\n', 3000);
       client.pause();
 
-      await delay(150);
+      // Keep the peer paused until the server has seen backpressure (bounded), then resume.
+      const deadline = Date.now() + 8000;
+      while (!sawBackpressure && Date.now() < deadline) await delay(20);
       client.resume();
 
       const fullBuf = await client.readUntil('0\r\n\r\n', 15000);

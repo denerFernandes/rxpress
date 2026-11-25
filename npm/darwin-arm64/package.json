@@ -1,5 +1,5 @@
 {
-  "name": "rxpress-darwin-arm64",
+  "name": "@denerfernandes/rxpress-darwin-arm64",
   "version": "0.1.0",
   "description": "rxpress native addon for darwin-arm64",
   "os": [
