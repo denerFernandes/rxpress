@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Fixed
+
+- Socket.IO works on rxpress: `new Server(app.listen())` and `new Server(http.createServer(app))` attach, and both the `polling` and `websocket` transports (and the upgrade between them) connect. The handle returned by `app.listen()` now has `listen()` (it throws `ERR_SERVER_ALREADY_LISTEN`, as in Node), which Socket.IO uses to recognise a server, and a server's `'request'` listeners are called as in Node: the app is one of them, a library that replaces the listeners sees every request, and without extra listeners requests keep going straight to the app.
+
+### Added
+
+- `test/real-libraries.test.ts` runs express-session, cookie-parser, Passport, multer, compression and Socket.IO against complete flows; the README lists what is exercised.
+
 ### Changed
 
 - README: add the Linux measurements and say plainly that CPU per request is the consistent saving (12-66% on Linux, 37-51% on macOS) while the memory saving depends on the request rate (11% on Linux, 54% on macOS under heavy load).

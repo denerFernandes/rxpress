@@ -8,6 +8,7 @@
  * (`sharedDirectNext`, `drainLoop`) are arrow-function fields created once per server, so the
  * loop allocates nothing beyond what each request needs.
  */
+import type { EventEmitter } from 'node:events';
 import type { Application } from '../application.js';
 import { appProtos, applyAppProtos, type ProtoApp } from '../app-protos.js';
 import { BRIDGE_HEADER, parseBridgeHeader } from '../bridge.js';
@@ -53,6 +54,18 @@ export class ServerRuntime {
   private pendingAsyncNext: NextFunction | null;
   private fastEnteredRouter: boolean;
 
+  /**
+   * Node servers give every request to all of their `'request'` listeners, and libraries such as
+   * Socket.IO and engine.io use that: they replace the listeners with their own, which answer
+   * their paths and pass the rest on. The app is itself one such listener. While it is the only
+   * one (the usual case) requests go straight to the app; otherwise they are emitted.
+   */
+  private requestTarget: EventEmitter | null;
+  private requestEventMode: boolean;
+  private unwatchRequests: (() => void) | null = null;
+  /** The request the app dispatched last, so an emitted request is not tracked twice. */
+  private lastDispatched: RxRequest | null;
+
   public readonly sharedDirectNext: NextFunction;
   /** Engine wake-up callback: drain stream events, then request batches. */
   public readonly drainLoop: () => void;
@@ -83,6 +96,9 @@ export class ServerRuntime {
     this.currentDirectNextIdx = 0;
     this.pendingAsyncNext = null;
     this.fastEnteredRouter = false;
+    this.requestTarget = null;
+    this.requestEventMode = false;
+    this.lastDispatched = null;
 
     this.sharedDirectNext = (err?: unknown) => {
       const r = this.currentDirectReq;
@@ -284,7 +300,79 @@ export class ServerRuntime {
 
   // ---- Dispatch ----
 
+  /**
+   * Starts watching the `'request'` listeners of `target` (the server object code sees: the handle
+   * of `app.listen()`, or the `net.Server`-shaped object of `http.createServer(app)`).
+   * `appListener` is the one that hands a request to the app.
+   */
+  public watchRequestListeners(target: EventEmitter, appListener: (...args: never[]) => void): void {
+    this.unwatchRequests?.();
+    this.requestTarget = target;
+    const recompute = (): void => {
+      const listeners = target.rawListeners('request');
+      this.requestEventMode = !(listeners.length === 1 && listeners[0] === appListener);
+    };
+    recompute();
+    // 'newListener' fires before the listener is added: look again on the next microtask.
+    const onNew = (event: string | symbol): void => {
+      if (event === 'request') queueMicrotask(recompute);
+    };
+    const onRemoved = (event: string | symbol): void => {
+      if (event === 'request') recompute();
+    };
+    target.on('newListener', onNew);
+    target.on('removeListener', onRemoved);
+    this.unwatchRequests = () => {
+      target.off('newListener', onNew);
+      target.off('removeListener', onRemoved);
+    };
+  }
+
+  /** What the app's own `'request'` listener runs: the normal routing of an engine request. */
+  public handleRequestEvent(req: RxRequest, res: RxResponse): void {
+    this.dispatchApp(req, res, req._routeId);
+  }
+
   private dispatchRequest(req: RxRequest, res: RxResponse, routeId: number): void {
+    if (this.requestEventMode) {
+      this.dispatchViaListeners(req, res, routeId);
+      return;
+    }
+    this.dispatchApp(req, res, routeId);
+  }
+
+  /** Emits the request to the server's `'request'` listeners (one of which may be the app). */
+  private dispatchViaListeners(req: RxRequest, res: RxResponse, routeId: number): void {
+    this.pendingAsyncNext = null;
+    this.fastEnteredRouter = false;
+    this.writer.lastReqId = -1;
+    this.lastDispatched = null;
+    try {
+      try {
+        this.requestTarget!.emit('request', req, res);
+      } catch (err) {
+        try {
+          this.finalHandler(req, res)(err);
+        } catch {
+          emergencyAnswer(this.writer, req, res);
+        }
+      }
+    } finally {
+      let ended = true;
+      try {
+        ended = res.writableEnded || this.writer.lastReqId === req._reqId;
+      } catch {
+        ended = this.writer.lastReqId === req._reqId;
+      }
+      // A listener that kept the response open (a long poll, say) is tracked like any pending one.
+      if (!ended && this.lastDispatched !== req) this.trackPending(req, res, routeId);
+      this.lastDispatched = null;
+      this.pendingAsyncNext = null;
+      this.fastEnteredRouter = false;
+    }
+  }
+
+  private dispatchApp(req: RxRequest, res: RxResponse, routeId: number): void {
     this.pendingAsyncNext = null;
     this.fastEnteredRouter = false;
     this.writer.lastReqId = -1;
@@ -326,6 +414,7 @@ export class ServerRuntime {
       }
       this.pendingAsyncNext = null;
       this.fastEnteredRouter = false;
+      this.lastDispatched = req;
     }
   }
 

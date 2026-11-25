@@ -14,7 +14,8 @@ import http from 'node:http';
 import https from 'node:https';
 import { syncBuiltinESMExports } from 'node:module';
 import { addUpgradeTarget, type Application } from './application.js';
-import type { AddressInfo, ServerHandle, TlsOptions } from './types.js';
+import type { InternalServerHandle } from './server/lifecycle.js';
+import type { AddressInfo, TlsOptions } from './types.js';
 
 type AnyFn = (...args: unknown[]) => unknown;
 
@@ -93,7 +94,7 @@ export class RxServer extends EventEmitter {
   /** @internal */
   private readonly _tls: TlsOptions | undefined;
   /** @internal */
-  private _handle: ServerHandle | null = null;
+  private _handle: InternalServerHandle | null = null;
   /** @internal */
   private _unref = false;
 
@@ -107,9 +108,17 @@ export class RxServer extends EventEmitter {
       if (typeof options.requestTimeout === 'number') this.requestTimeout = options.requestTimeout;
       if (typeof options.maxHeaderSize === 'number') app.set('maxHeaderSizeBytes', options.maxHeaderSize);
     }
-    // Node registers the listener for 'request'; keep that observable.
-    super.on('request', app as unknown as AnyFn);
+    // Node registers the app as a 'request' listener and libraries (Socket.IO, engine.io) wrap or
+    // replace it. The engine emits 'request' to this server's listeners only when there are
+    // others than this one; see ServerRuntime.requestTarget.
+    super.on('request', this._appListener);
   }
+
+  /** @internal The app's own `'request'` listener. */
+  private readonly _appListener = (req: unknown, res: unknown): void => {
+    if (this._handle !== null) this._handle._handleRequest(req, res);
+    else (this.app as unknown as (a: unknown, b: unknown) => void)(req, res);
+  };
 
   /** @internal Forward `net.Server` tunables the user changed into engine settings. */
   private _applySettings(): void {
@@ -145,21 +154,23 @@ export class RxServer extends EventEmitter {
       throw err;
     }
     if (parsed.cb) this.once('listening', parsed.cb);
-    let handle: ServerHandle;
+    let handle: InternalServerHandle;
     try {
       this._applySettings();
       const host = parsed.host ?? '0.0.0.0';
-      handle = this._tls
+      handle = (this._tls
         ? this.app.listenTls(this._tls, parsed.port, host)
-        : this.app.listen(parsed.port, host);
+        : this.app.listen(parsed.port, host)) as InternalServerHandle;
     } catch (err) {
       // net.Server reports bind failures (EADDRINUSE...) as an async 'error' event.
       process.nextTick(() => this.emit('error', err));
       return this;
     }
     this._handle = handle;
-    // 'upgrade' listeners on this server (ws, socket.io...) receive the engine's upgrades.
+    // 'upgrade' listeners on this server (ws, socket.io...) receive the engine's upgrades, and
+    // 'request' listeners the engine's requests.
     addUpgradeTarget(handle, this);
+    handle._takeRequests(this, this._appListener);
     if (this._unref) handle.unref();
     if (this.timeout) handle.setTimeout(this.timeout);
     handle.once('listening', () => {

@@ -5,6 +5,8 @@
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import type { Application } from '../application.js';
+import { RxRequest } from '../request.js';
+import type { RxResponse } from '../response.js';
 import {
   loadNativeAddon,
   type NativeServerConfig,
@@ -76,6 +78,14 @@ function loadPemBuffer(input: string | Buffer): Buffer {
   return readFileSync(input);
 }
 
+/** What the engine adds to the handle for its own use; not part of the public types. */
+export interface InternalServerHandle extends ServerHandle {
+  /** Runs the app's routing for an engine request (the app's `'request'` listener). */
+  _handleRequest(req: unknown, res: unknown): void;
+  /** Makes `target` the object whose `'request'` listeners see the requests. */
+  _takeRequests(target: EventEmitter, appListener: (...args: never[]) => void): void;
+}
+
 export interface StartOptions {
   host: string;
   port: number;
@@ -144,9 +154,9 @@ export function startServer(app: Application, opts: StartOptions): ServerHandle 
 }
 
 /** The handle `listen()` returns when the engine could not bind (like a Node server that failed). */
-function failedServerHandle(): ServerHandle {
+function failedServerHandle(): InternalServerHandle {
   const emitter = new EventEmitter();
-  const handle: ServerHandle = Object.assign(emitter, {
+  const handle: InternalServerHandle = Object.assign(emitter, {
     listening: false,
     timeout: 0,
     keepAliveTimeout: 5000,
@@ -163,6 +173,11 @@ function failedServerHandle(): ServerHandle {
     },
     closeAllConnections(): void {},
     closeIdleConnections(): void {},
+    listen(): ServerHandle {
+      throw new Error('rxpress: the server failed to start; call app.listen() again.');
+    },
+    _handleRequest(): void {},
+    _takeRequests(): void {},
     ref(): ServerHandle {
       return handle;
     },
@@ -174,7 +189,7 @@ function failedServerHandle(): ServerHandle {
       if (cb) handle.on('timeout', cb);
       return handle;
     },
-  }) as ServerHandle;
+  }) as unknown as InternalServerHandle;
   return handle;
 }
 
@@ -191,7 +206,9 @@ function createServerHandle(
   let closePromise: Promise<void> | null = null;
 
   const emitter = new EventEmitter();
-  const handle: ServerHandle = Object.assign(emitter, {
+  // The app is the server's `'request'` listener, as in Node (see ServerRuntime.requestTarget).
+  const appListenerOnHandle = (req: unknown, res: unknown): void => handle._handleRequest(req, res);
+  const handle: InternalServerHandle = Object.assign(emitter, {
     listening: true,
     timeout: 0,
     keepAliveTimeout: nativeCfg.keepAliveTimeoutMs ?? 5000,
@@ -199,6 +216,27 @@ function createServerHandle(
     requestTimeout: nativeCfg.requestTimeoutMs ?? 300000,
     address(): AddressInfo | null {
       return runtime.closed || runtime.closing ? null : addrInfo;
+    },
+    listen(): ServerHandle {
+      const err = new Error(
+        handle.listening
+          ? 'Listen method has been called more than once without closing.'
+          : 'rxpress: this server was closed; call app.listen() to start a new one.'
+      ) as NodeJS.ErrnoException;
+      if (handle.listening) err.code = 'ERR_SERVER_ALREADY_LISTEN';
+      throw err;
+    },
+    _handleRequest(req: unknown, res: unknown): void {
+      if (req instanceof RxRequest) {
+        runtime.handleRequestEvent(req, res as RxResponse);
+      } else {
+        // A Node request handed to the server by hand (`server.emit('request', req, res)`).
+        (app as unknown as (a: unknown, b: unknown) => void)(req, res);
+      }
+    },
+    _takeRequests(target: EventEmitter, appListener: (...args: never[]) => void): void {
+      handle.removeListener('request', appListenerOnHandle);
+      runtime.watchRequestListeners(target, appListener);
     },
     async close(cb?: (err?: Error) => void): Promise<void> {
       handle.listening = false;
@@ -245,6 +283,8 @@ function createServerHandle(
       }
       return handle;
     },
-  }) as ServerHandle;
+  }) as unknown as InternalServerHandle;
+  handle.on('request', appListenerOnHandle);
+  runtime.watchRequestListeners(handle, appListenerOnHandle);
   return handle;
 }
