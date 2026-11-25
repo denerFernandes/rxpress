@@ -1,0 +1,39 @@
+name: Bug report
+description: Something behaves differently from Express 5, crashes, or is slower or heavier than it should be.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: rxpress version
+      placeholder: "0.1.1"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Node.js, OS and architecture
+      placeholder: "Node 24.1, Debian 12 x64 (glibc)"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: If you compared with Express 5, say what it does.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: The smallest app or test that shows it, and how you ran it.
+      render: js
+    validations:
+      required: true

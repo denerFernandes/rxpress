@@ -1,0 +1,21 @@
+name: Feature or compatibility request
+description: Propose something new, or an Express 5 behaviour that is missing.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you need, and why?
+      description: Describe the use case first. For a compatibility gap, link the Express 5 documentation or test that defines the behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
