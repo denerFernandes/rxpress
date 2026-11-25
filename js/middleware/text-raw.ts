@@ -9,6 +9,8 @@ import {
   normalizeTypes,
   requestCharset,
   withParsedBody,
+  shouldParse,
+  checkVerifyOption,
 } from './body-common.js';
 
 /**
@@ -18,6 +20,7 @@ export function text(options: TextOptions = {}): RequestHandler {
   const limit = parseSizeLimit(options.limit, 100 * 1024);
   const defaultCharset = (options.defaultCharset || 'utf-8').toLowerCase();
   const inflate = options.inflate !== false;
+  checkVerifyOption(options.verify);
   const { list, customFn } = normalizeTypes(options.type, ['text/plain']);
 
   const handler: RequestHandler = (req: RxRequest, res: RxResponse, next: NextFunction) => {
@@ -25,16 +28,7 @@ export function text(options: TextOptions = {}): RequestHandler {
       return next(createHttpError(413, 'request entity too large', 'entity.too.large'));
     }
 
-    const matches = customFn
-      ? customFn(req)
-      : req._bodyMode === BODY_MODE_TEXT
-        ? true
-        : req._bodyLen === 0 &&
-            !req._isStreamedBody() &&
-            (req.method === 'GET' || req.method === 'HEAD')
-          ? false
-          : Boolean(req.is(...list));
-    if (!matches) {
+    if (!shouldParse(req, BODY_MODE_TEXT, list, customFn)) {
       return next();
     }
 
@@ -59,6 +53,7 @@ export function text(options: TextOptions = {}): RequestHandler {
 export function raw(options: RawOptions = {}): RequestHandler {
   const limit = parseSizeLimit(options.limit, 100 * 1024);
   const inflate = options.inflate !== false;
+  checkVerifyOption(options.verify);
   const { list, customFn } = normalizeTypes(options.type, ['application/octet-stream']);
 
   const handler: RequestHandler = (req: RxRequest, res: RxResponse, next: NextFunction) => {
@@ -66,16 +61,7 @@ export function raw(options: RawOptions = {}): RequestHandler {
       return next(createHttpError(413, 'request entity too large', 'entity.too.large'));
     }
 
-    const matches = customFn
-      ? customFn(req)
-      : req._bodyMode === BODY_MODE_RAW
-        ? true
-        : req._bodyLen === 0 &&
-            !req._isStreamedBody() &&
-            (req.method === 'GET' || req.method === 'HEAD')
-          ? false
-          : Boolean(req.is(...list));
-    if (!matches) {
+    if (!shouldParse(req, BODY_MODE_RAW, list, customFn)) {
       return next();
     }
 

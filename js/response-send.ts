@@ -4,6 +4,7 @@
  * sendFile/download. Plain functions over the response; `RxResponse` keeps thin methods that
  * delegate here.
  */
+import { createHash } from 'node:crypto';
 import { open, realpath, stat } from 'node:fs/promises';
 import { STATUS_CODES } from 'node:http';
 import { basename, isAbsolute, normalize, resolve, sep } from 'node:path';
@@ -15,14 +16,101 @@ import {
   CT_TEXT_PLAIN,
   RESP_FLAG_FILE_META,
   RESP_FLAG_IS_FILE,
+  RESP_FLAG_SEND,
   RESP_FLAG_SUPPRESS_ETAG,
   RESP_FLAG_SUPPRESS_POWERED_BY,
 } from './protocol.js';
 import { RxResponse } from './response.js';
+import { setCharset } from './response-headers.js';
 import { contentDisposition, UP_PATH_REGEXP } from './security.js';
 import type { SendFileOptions } from './types.js';
 
 const MAX_AGE_CAP_SECS = 31536000;
+
+type EtagSetting = boolean | string | ((body: string | Buffer, encoding?: string) => string | undefined);
+
+/** The `etag` package: `"<len hex>-<sha1 base64, 27 chars>"`, `W/` prefixed when weak. */
+function computeEtag(body: string | Uint8Array, weak: boolean): string {
+  let tag: string;
+  if (body.length === 0) {
+    tag = '"0-2jmj7l5rSw0yVb/vlWAYkK/YBwk"';
+  } else {
+    const hash = createHash('sha1').update(body).digest('base64').substring(0, 27);
+    const len = typeof body === 'string' ? Buffer.byteLength(body, 'utf8') : body.byteLength;
+    tag = `"${len.toString(16)}-${hash}"`;
+  }
+  return weak ? `W/${tag}` : tag;
+}
+
+/**
+ * Batch flags for a `res.send`-family response. The engine computes the ETag (weak/strong per
+ * the engine config) unless the app disabled it, or uses a custom `etag` function (applied in JS
+ * by `applyCustomEtag`).
+ * @internal
+ */
+export function sendFlags(res: RxResponse, hasBody: boolean): number {
+  let flags = RESP_FLAG_SEND;
+  if (res._suppressXpb) flags |= RESP_FLAG_SUPPRESS_POWERED_BY;
+  const setting = res.app.get('etag') as EtagSetting;
+  if (!hasBody || res._suppressEtag || setting === false || setting === 'off' || typeof setting === 'function') {
+    flags |= RESP_FLAG_SUPPRESS_ETAG;
+  }
+  return flags;
+}
+
+/** `app.set('etag', fn)`: Express calls it with the body; the engine cannot. */
+function applyCustomEtag(res: RxResponse, body: string | Uint8Array): void {
+  const setting = res.app.get('etag') as EtagSetting;
+  if (typeof setting !== 'function' || res._suppressEtag || res.hasHeader('etag')) return;
+  const tag = setting(typeof body === 'string' ? body : Buffer.from(body), 'utf8');
+  if (tag) res.setHeader('ETag', tag);
+}
+
+/**
+ * Express `res.send` rules applied in JS, for when `res.end` is wrapped by middleware and the
+ * engine only sees a plain `res.end`: ETag, freshness, 204/205/304 stripping.
+ */
+function applySendRulesInJs(res: RxResponse, body: string | Uint8Array): string | Uint8Array {
+  const setting = res.app.get('etag') as EtagSetting;
+  if (!res._suppressEtag && !res.hasHeader('etag')) {
+    if (typeof setting === 'function') {
+      applyCustomEtag(res, body);
+    } else if (setting !== false && setting !== 'off') {
+      res.setHeader('ETag', computeEtag(body, setting !== 'strong'));
+    }
+  }
+  if (res.req.fresh) res.statusCode = 304;
+  const code = res.statusCode;
+  if (code === 204 || code === 304) {
+    res.removeHeader('content-type');
+    res.removeHeader('content-length');
+    res.removeHeader('transfer-encoding');
+    res._fastCtCode = CT_CUSTOM;
+    return '';
+  }
+  if (code === 205) {
+    res.setHeader('content-length', '0');
+    res.removeHeader('transfer-encoding');
+    return '';
+  }
+  return body;
+}
+
+/**
+ * Conditional GET/HEAD: resolve the ETag and freshness here instead of in the engine, so a 304
+ * is visible as `res.statusCode` (loggers, `on-finished` listeners) exactly as in Express. The
+ * engine still strips the entity headers; it keeps this ETag and agrees on freshness.
+ */
+function resolveConditional(res: RxResponse, body: string | Uint8Array, hasBody: boolean): void {
+  if (hasBody && !res._suppressEtag && !res.hasHeader('etag')) {
+    const setting = res.app.get('etag') as EtagSetting;
+    if (typeof setting === 'function') applyCustomEtag(res, body);
+    else if (setting !== false && setting !== 'off') {
+      res.setHeader('ETag', computeEtag(body, setting !== 'strong'));
+    }
+  }
+  if (res.req.fresh) res.statusCode = 304;
+}
 
 function parseSendFileMaxAgeSecs(maxAge: number | string | undefined): number {
   if (maxAge === undefined) return 0;
@@ -84,6 +172,7 @@ export function sendJson(res: RxResponse, body?: unknown): RxResponse {
       ? JSON.stringify(body, replacer, spaces)
       : JSON.stringify(body);
   const payload = str === undefined ? '' : str;
+  applyCustomEtag(res, payload);
 
   // Ultra-fast path: no custom headers, no wrapped writeHead/end/write, not streaming
   if (
@@ -92,11 +181,10 @@ export function sendJson(res: RxResponse, body?: unknown): RxResponse {
       res._statusMessage === undefined &&
     res.writeHead === RxResponse.prototype.writeHead &&
     res.end === RxResponse.prototype.end &&
-    res.write === RxResponse.prototype.write
+    res.write === RxResponse.prototype.write &&
+    !res.req._conditional
   ) {
-    let flags = 0;
-    if (res._suppressXpb) flags |= RESP_FLAG_SUPPRESS_POWERED_BY;
-    if (res._suppressEtag) flags |= RESP_FLAG_SUPPRESS_ETAG;
+    const flags = sendFlags(res, true);
     res._lastBodyStr = payload;
     res._writer.writeFastString(
       res._reqId,
@@ -116,10 +204,12 @@ export function sendJson(res: RxResponse, body?: unknown): RxResponse {
       res.end(payload);
       return res;
     }
-    sendBufferedString(res, payload, CT_JSON);
+    sendBufferedString(res, payload, CT_JSON, true);
     return res;
   }
-  sendBufferedString(res, payload, CT_CUSTOM);
+  // Express sends the JSON string through res.send, which sets the charset.
+  res.setHeader('content-type', setCharset(String(res.getHeader('content-type')), 'utf-8'));
+  sendBufferedString(res, payload, CT_CUSTOM, true);
   return res;
 }
 
@@ -145,7 +235,8 @@ export function sendJsonp(res: RxResponse, body?: unknown): RxResponse {
       const payload = `/**/ typeof ${safeCb} === 'function' && ${safeCb}(${escaped});`;
       res.setHeader('x-content-type-options', 'nosniff');
       res.setHeader('content-type', 'text/javascript; charset=utf-8');
-      sendBufferedString(res, payload, CT_CUSTOM);
+      applyCustomEtag(res, payload);
+      sendBufferedString(res, payload, CT_CUSTOM, true);
       return res;
     }
   }
@@ -160,28 +251,33 @@ export function sendBody(res: RxResponse, body?: unknown): RxResponse {
   if (body === undefined || body === null) {
     const ctCode =
       res.statusCode === 204 || res.statusCode === 304 ? CT_CUSTOM : res._fastCtCode;
-    sendBufferedString(res, '', ctCode);
+    // `undefined` has no length, so Express skips the ETag; `null` is sent as ''.
+    if (body === null) applyCustomEtag(res, '');
+    sendBufferedString(res, '', ctCode, true, body === null);
     return res;
   }
 
   if (typeof body === 'string') {
-    const ctCode =
-      res._fastCtCode !== CT_CUSTOM
-        ? res._fastCtCode
-        : res.hasHeader('content-type')
-          ? CT_CUSTOM
-          : CT_HTML;
+    let ctCode = res._fastCtCode;
+    if (ctCode === CT_CUSTOM) {
+      const ct = res.getHeader('content-type');
+      if (typeof ct === 'string') {
+        res.setHeader('content-type', setCharset(ct, 'utf-8'));
+      } else {
+        ctCode = CT_HTML;
+      }
+    }
+    applyCustomEtag(res, body);
     if (
       !res._streaming &&
       res._headers === null &&
       res._statusMessage === undefined &&
       res.writeHead === RxResponse.prototype.writeHead &&
       res.end === RxResponse.prototype.end &&
-      res.write === RxResponse.prototype.write
+      res.write === RxResponse.prototype.write &&
+      !res.req._conditional
     ) {
-      let flags = 0;
-      if (res._suppressXpb) flags |= RESP_FLAG_SUPPRESS_POWERED_BY;
-      if (res._suppressEtag) flags |= RESP_FLAG_SUPPRESS_ETAG;
+      const flags = sendFlags(res, true);
       res._lastBodyStr = body;
       res._writer.writeFastString(
         res._reqId,
@@ -194,7 +290,7 @@ export function sendBody(res: RxResponse, body?: unknown): RxResponse {
       res._markFinished();
       return res;
     }
-    sendBufferedString(res, body, ctCode);
+    sendBufferedString(res, body, ctCode, true);
     return res;
   }
 
@@ -205,7 +301,8 @@ export function sendBody(res: RxResponse, body?: unknown): RxResponse {
         : res.hasHeader('content-type')
           ? CT_CUSTOM
           : CT_OCTET_STREAM;
-    sendBufferedBuffer(res, body, ctCode);
+    applyCustomEtag(res, body);
+    sendBufferedBuffer(res, body, ctCode, true);
     return res;
   }
 
@@ -228,18 +325,18 @@ export function sendStatusCode(res: RxResponse, code: number): RxResponse {
       res._statusMessage === undefined &&
     res.writeHead === RxResponse.prototype.writeHead &&
     res.end === RxResponse.prototype.end &&
-    res.write === RxResponse.prototype.write
+    res.write === RxResponse.prototype.write &&
+    !res.req._conditional
   ) {
-    let flags = 0;
-    if (res._suppressXpb) flags |= RESP_FLAG_SUPPRESS_POWERED_BY;
-    if (res._suppressEtag) flags |= RESP_FLAG_SUPPRESS_ETAG;
+    const flags = sendFlags(res, true);
     res._lastBodyStr = body;
     res._writer.writeFastString(res._reqId, code, CT_TEXT_PLAIN, flags, null, body);
     res._markFinished();
     return res;
   }
   res.setHeader('content-type', 'text/plain; charset=utf-8');
-  sendBufferedString(res, body, CT_CUSTOM);
+  applyCustomEtag(res, body);
+  sendBufferedString(res, body, CT_CUSTOM, true);
   return res;
 }
 
@@ -273,8 +370,9 @@ export function download(
     'Content-Disposition': contentDisposition(basename(filename)),
   };
   if (opts.headers) {
+    // Express: the attachment header always wins over a user-provided Content-Disposition.
     for (const [k, v] of Object.entries(opts.headers)) {
-      headers[k] = v;
+      if (k.toLowerCase() !== 'content-disposition') headers[k] = v;
     }
   }
   const mergedOpts: SendFileOptions = { ...opts, headers };
@@ -313,16 +411,23 @@ function materializeFastCt(res: RxResponse, ctCode: number): number {
 }
 
 /** @internal */
-export function writeBufferedSyncString(res: RxResponse, body: string, ctCode: number): void {
+export function writeBufferedSyncString(
+  res: RxResponse,
+  body: string,
+  ctCode: number,
+  send = false,
+  hasBody = true
+): void {
   if (res._header === null && res.writeHead !== RxResponse.prototype.writeHead) {
     res._lastBodyStr = body;
     ctCode = runHookedWriteHead(res, ctCode);
   } else {
     res._triggerWriteHeadHook();
   }
-  let flags = 0;
-  if (res._suppressXpb) flags |= RESP_FLAG_SUPPRESS_POWERED_BY;
-  if (res._suppressEtag) flags |= RESP_FLAG_SUPPRESS_ETAG;
+  // A plain `res.end` never gets an ETag (Express only tags in res.send).
+  const flags = send
+    ? sendFlags(res, hasBody)
+    : (res._suppressXpb ? RESP_FLAG_SUPPRESS_POWERED_BY : 0) | RESP_FLAG_SUPPRESS_ETAG;
   res._lastBodyStr = body;
   res._writer.writeFastString(
     res._reqId,
@@ -336,16 +441,21 @@ export function writeBufferedSyncString(res: RxResponse, body: string, ctCode: n
 }
 
 /** @internal */
-export function writeBufferedSyncBuffer(res: RxResponse, buf: Uint8Array, ctCode: number): void {
+export function writeBufferedSyncBuffer(
+  res: RxResponse,
+  buf: Uint8Array,
+  ctCode: number,
+  send = false
+): void {
   if (res._header === null && res.writeHead !== RxResponse.prototype.writeHead) {
     res._contentLength = buf.byteLength;
     ctCode = runHookedWriteHead(res, ctCode);
   } else {
     res._triggerWriteHeadHook();
   }
-  let flags = 0;
-  if (res._suppressXpb) flags |= RESP_FLAG_SUPPRESS_POWERED_BY;
-  if (res._suppressEtag) flags |= RESP_FLAG_SUPPRESS_ETAG;
+  const flags = send
+    ? sendFlags(res, true)
+    : (res._suppressXpb ? RESP_FLAG_SUPPRESS_POWERED_BY : 0) | RESP_FLAG_SUPPRESS_ETAG;
   res._contentLength = buf.byteLength;
   res._writer.writeFastBuffer(
     res._reqId,
@@ -359,31 +469,39 @@ export function writeBufferedSyncBuffer(res: RxResponse, buf: Uint8Array, ctCode
 }
 
 /** @internal */
-export function sendBufferedString(res: RxResponse, body: string, ctCode: number): void {
+export function sendBufferedString(
+  res: RxResponse,
+  body: string,
+  ctCode: number,
+  send = false,
+  hasBody = true
+): void {
   if (res._streaming) {
     res.end(body);
     return;
   }
   if (res.end !== RxResponse.prototype.end || res.write !== RxResponse.prototype.write) {
     materializeFastCt(res, ctCode);
-    res.end(body);
+    res.end(send && hasBody ? applySendRulesInJs(res, body) : body);
     return;
   }
-  writeBufferedSyncString(res, body, ctCode);
+  if (send && res.req._conditional) resolveConditional(res, body, hasBody);
+  writeBufferedSyncString(res, body, ctCode, send, hasBody);
 }
 
 /** @internal */
-function sendBufferedBuffer(res: RxResponse, buf: Uint8Array, ctCode: number): void {
+function sendBufferedBuffer(res: RxResponse, buf: Uint8Array, ctCode: number, send = false): void {
   if (res._streaming) {
     res.end(buf);
     return;
   }
   if (res.end !== RxResponse.prototype.end || res.write !== RxResponse.prototype.write) {
     materializeFastCt(res, ctCode);
-    res.end(buf);
+    res.end(send ? applySendRulesInJs(res, buf) : buf);
     return;
   }
-  writeBufferedSyncBuffer(res, buf, ctCode);
+  if (send && res.req._conditional) resolveConditional(res, buf, true);
+  writeBufferedSyncBuffer(res, buf, ctCode, send);
 }
 
 // ---- res.sendFile() ----
@@ -416,9 +534,7 @@ function rejectDotfileSegments(segs: string[], dotfiles: string): void {
 /** `root` given: the lexical path under `absRoot` (throws on traversal and hidden dotfiles). */
 function resolveUnderRoot(filePath: string, absRoot: string, dotfiles: string): string {
   const rel = filePath.replace(/^[\\/]+/, '');
-  if (UP_PATH_REGEXP.test(rel) || rel === '..') {
-    throw forbiddenError();
-  }
+  // send: normalize first, so `a/../b` stays inside the root and only an escape is refused.
   const normRel = normalize('.' + sep + rel);
   if (UP_PATH_REGEXP.test(normRel) || normRel === '..') {
     throw forbiddenError();
@@ -504,7 +620,9 @@ export function sendFile(
   }
 
   if (!filePath || typeof filePath !== 'string') {
-    const err = new TypeError('path argument is required to res.sendFile');
+    const err = new TypeError(
+      filePath ? 'path must be a string to res.sendFile' : 'path argument is required to res.sendFile'
+    );
     if (cb) {
       cb(err);
       return;
@@ -552,10 +670,12 @@ async function sendFileAsync(
 
     let canonFile: string;
     let absRoot: string | undefined;
+    let relUnderRoot = filePath;
 
     if (options.root) {
       absRoot = resolve(options.root);
       const resolved = resolveUnderRoot(filePath, absRoot, dotfiles);
+      relUnderRoot = resolved.slice(absRoot.length).replace(/^[\\/]+/, '');
       const [canonRoot, realFile] = await Promise.all([
         realpath(absRoot),
         realpath(resolved),
@@ -626,7 +746,7 @@ async function sendFileAsync(
     optsBits |= (dotCode & 0x03) << 5;
     if (enableEtag) optsBits |= 0x80;
 
-    const pathForRust = hasRoot ? filePath : canonFile;
+    const pathForRust = hasRoot ? relUnderRoot : canonFile;
     const metaBuf = encodeFileMeta(optsBits, maxAgeSecs, pathForRust, absRoot);
 
     res._triggerWriteHeadHook();

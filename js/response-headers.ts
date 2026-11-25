@@ -8,7 +8,7 @@
  * those methods keep applying.
  */
 import { STATUS_CODES, validateHeaderName, validateHeaderValue } from 'node:http';
-import { basename } from 'node:path';
+import { basename, extname } from 'node:path';
 import {
   CT_CUSTOM,
   CT_HTML,
@@ -16,7 +16,7 @@ import {
   CT_OCTET_STREAM,
   CT_TEXT_PLAIN,
 } from './protocol.js';
-import { normalizeMimeShorthand } from './request-parse.js';
+import { loadNativeAddon } from './native.js';
 import type { RxResponse } from './response.js';
 import { fastCtToString, sendBufferedString, throwHeadersSent } from './response-send.js';
 import {
@@ -30,27 +30,120 @@ import type { CookieOptions } from './types.js';
 
 type HeaderInput = Record<string, string | number | string[]>;
 
+/** Charsets mime-db declares outside `text/*` (which defaults to UTF-8 in `mime-types`). */
+const MIME_CHARSETS: Record<string, string> = {
+  'application/javascript': 'utf-8',
+  'application/json': 'utf-8',
+  'application/manifest+json': 'utf-8',
+  'application/elm+json': 'utf-8',
+  'application/fhir+json': 'utf-8',
+  'application/fhir+xml': 'utf-8',
+  'application/3gpdash-qoe-report+xml': 'utf-8',
+  'application/beep+xml': 'utf-8',
+  'application/cda+xml': 'utf-8',
+  'application/emergencycalldata.cap+xml': 'utf-8',
+  'application/hl7v2+xml': 'utf-8',
+  'application/im-iscomposing+xml': 'utf-8',
+  'application/msc-ivr+xml': 'utf-8',
+  'application/msc-mixer+xml': 'utf-8',
+  'application/pidf+xml': 'utf-8',
+  'application/pidf-diff+xml': 'utf-8',
+  'application/poc-settings+xml': 'utf-8',
+  'application/vnd.omads-email+xml': 'utf-8',
+  'application/vnd.omads-file+xml': 'utf-8',
+  'application/vnd.omads-folder+xml': 'utf-8',
+  'application/vnd.syncml+xml': 'utf-8',
+  'application/vnd.syncml.dm+wbxml': 'utf-8',
+  'application/vnd.syncml.dm+xml': 'utf-8',
+  'application/vnd.syncml.dmddf+xml': 'utf-8',
+  'application/vnd.syncml.dmtnds+xml': 'utf-8',
+  'application/vnd.wap.wbxml': 'utf-8',
+  'application/news-checkgroups': 'us-ascii',
+  'application/news-groupinfo': 'us-ascii',
+  'application/prs.cyn': '7-bit',
+  'application/vnd.fdsn.stationxml+xml': 'xml-based',
+};
+
+/** `mime-types` `contentType()` for a full type: append the default charset when missing. */
+function withDefaultCharset(value: string): string {
+  if (value.indexOf('charset') !== -1) return value;
+  const semi = value.indexOf(';');
+  const base = (semi === -1 ? value : value.slice(0, semi)).trim().toLowerCase();
+  const charset = MIME_CHARSETS[base] ?? (base.startsWith('text/') ? 'utf-8' : undefined);
+  return charset ? `${value}; charset=${charset}` : value;
+}
+
+const TOKEN_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+/**
+ * Express `utils.setCharset` (content-type parse + format): lower-cased type, parameters kept in
+ * order with lower-cased names, malformed parameters dropped, `charset` replaced or appended.
+ * @internal
+ */
+export function setCharset(type: string, charset: string): string {
+  if (!type || !charset) return type;
+  const parts = type.split(';');
+  const base = parts[0].trim().toLowerCase();
+  const params: Array<[string, string]> = [];
+  let replaced = false;
+  for (let i = 1; i < parts.length; i++) {
+    const eq = parts[i].indexOf('=');
+    if (eq === -1) continue;
+    const key = parts[i].slice(0, eq).trim().toLowerCase();
+    let val = parts[i].slice(eq + 1).trim();
+    if (!TOKEN_RE.test(key)) continue;
+    if (val.length >= 2 && val[0] === '"' && val[val.length - 1] === '"') {
+      val = val.slice(1, -1).replace(/\\(.)/g, '$1');
+    }
+    if (key === 'charset') {
+      if (replaced) continue;
+      val = charset;
+      replaced = true;
+    }
+    params.push([key, val]);
+  }
+  if (!replaced) params.push(['charset', charset]);
+  let out = base;
+  for (const [k, v] of params) {
+    out += `; ${k}=${TOKEN_RE.test(v) ? v : `"${v.replace(/(["\\])/g, '\\$1')}"`}`;
+  }
+  return out;
+}
+
+/**
+ * Express `res.set('Content-Type', v)`: `mime.contentType(v)`. An unknown extension yields
+ * `false` there, which Node then sends as the string "false".
+ */
+function expressContentType(value: string): string {
+  if (value.indexOf('/') === -1) {
+    const ext = extname('x.' + value).toLowerCase().slice(1);
+    return (ext && loadNativeAddon().mimeContentType(ext)) || 'false';
+  }
+  return withDefaultCharset(value);
+}
+
 /** @internal `res.set()` / `res.header()`. */
 export function setFields(res: RxResponse, field: string | HeaderInput, val?: string | number | string[]): void {
   if (typeof field === 'string') {
     if (val !== undefined) {
-      if (Array.isArray(val) && field.toLowerCase() === 'content-type') {
-        throw new TypeError('Content-Type cannot be set to an Array');
+      if (field.toLowerCase() === 'content-type') {
+        if (Array.isArray(val)) throw new TypeError('Content-Type cannot be set to an Array');
+        res.setHeader(field, expressContentType(String(val)));
+        return;
       }
-      res.setHeader(field, val);
+      res.setHeader(field, Array.isArray(val) ? val.map(String) : String(val));
     }
   } else if (field && typeof field === 'object') {
     for (const k of Object.keys(field)) {
-      res.setHeader(k, field[k]);
+      setFields(res, k, field[k]);
     }
   }
 }
 
 /** @internal `res.get()`. */
-export function getField(res: RxResponse, field: string): string | undefined {
-  const v = res.getHeader(field);
-  if (v === undefined) return undefined;
-  return Array.isArray(v) ? v.join(', ') : String(v);
+export function getField(res: RxResponse, field: string): string | string[] | undefined {
+  // Express: `res.get()` is `res.getHeader()` (arrays stay arrays).
+  return res.getHeader(field);
 }
 
 /** @internal `res.append()`. */
@@ -88,26 +181,55 @@ export function setType(res: RxResponse, type: string): void {
     }
   }
   res._fastCtCode = CT_CUSTOM;
-  const ct = normalizeMimeShorthand(type);
-  const withCharset =
-    ct.startsWith('text/') || ct === 'application/json' || ct === 'application/javascript'
-      ? `${ct}; charset=utf-8`
-      : ct;
-  res.setHeader('content-type', withCharset);
+  res.setHeader('content-type', withDefaultCharset(expressTypeLookup(type)));
 }
 
-/** @internal `res.vary()`. */
-export function addVary(res: RxResponse, field: string): void {
-  const prev = res.get('vary');
-  if (!prev) {
-    res.setHeader('vary', field);
+/**
+ * Express `res.type()`: a value with `/` is used as is, anything else is a file name or
+ * extension looked up like `mime-types.contentType()`, falling back to octet-stream.
+ */
+function expressTypeLookup(type: string): string {
+  if (type.indexOf('/') !== -1) return type;
+  const ext = extname('x.' + type).toLowerCase().slice(1);
+  return (ext && loadNativeAddon().mimeContentType(ext)) || 'application/octet-stream';
+}
+
+const VARY_FIELD_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/** `vary` package `parse`: comma-separated list, surrounding spaces dropped. */
+function parseVaryList(header: string): string[] {
+  const list: string[] = [];
+  for (const part of header.split(',')) {
+    const v = part.trim();
+    if (v) list.push(v);
+  }
+  return list;
+}
+
+/** @internal `res.vary()`: the `vary` package. */
+export function addVary(res: RxResponse, field: string | string[]): void {
+  if (!field) throw new TypeError('field argument is required');
+  const fields = Array.isArray(field) ? field : parseVaryList(String(field));
+  for (const f of fields) {
+    if (!VARY_FIELD_RE.test(f)) throw new TypeError('field argument contains an invalid header name');
+  }
+  const prev = res.getHeader('vary') ?? '';
+  const header = Array.isArray(prev) ? prev.join(', ') : String(prev);
+  if (header === '*') return;
+  let val = header;
+  const vals = parseVaryList(header.toLowerCase());
+  if (fields.includes('*') || vals.includes('*')) {
+    res.setHeader('vary', '*');
     return;
   }
-  if (prev === '*') return;
-  const existing = prev.split(',').map((s) => s.trim().toLowerCase());
-  if (!existing.includes(field.toLowerCase())) {
-    res.setHeader('vary', `${prev}, ${field}`);
+  for (const f of fields) {
+    const lower = f.toLowerCase();
+    if (!vals.includes(lower)) {
+      vals.push(lower);
+      val = val ? `${val}, ${f}` : f;
+    }
   }
+  if (val) res.setHeader('vary', val);
 }
 
 /** @internal `res.links()`. */
@@ -183,17 +305,11 @@ export function setCookie(res: RxResponse, name: string, value: unknown, options
   return res.append('set-cookie', header);
 }
 
-/** @internal `res.attachment()`. */
+/** @internal `res.attachment()`: same steps as Express 5. */
 export function setAttachment(res: RxResponse, filename?: string): void {
-  if (filename) {
-    res.setHeader('content-disposition', contentDisposition(basename(filename)));
-    const extIdx = filename.lastIndexOf('.');
-    if (extIdx !== -1 && !res.hasHeader('content-type')) {
-      res.type(filename.slice(extIdx));
-    }
-  } else {
-    res.setHeader('content-disposition', 'attachment');
-  }
+  const name = filename !== undefined ? basename(filename) : undefined;
+  if (name) res.type(extname(name));
+  res.setHeader('content-disposition', contentDisposition(name));
 }
 
 /** @internal `res.setHeader()` (Node semantics, validated like `ServerResponse`). */

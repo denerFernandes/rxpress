@@ -7,12 +7,13 @@ use crate::date::write_date_header;
 use crate::protocol::{
     build_simple_raw_response, content_length_matches, is_reason_header, is_valid_response_header,
     is_valid_status, push_connection_header, reason_for, CT_HTML, CT_JSON, CT_OCTET_STREAM,
-    CT_TEXT_PLAIN, RESP_FLAG_FILE_META, RESP_FLAG_IS_FILE, RESP_FLAG_SUPPRESS_ETAG,
+    CT_TEXT_PLAIN, RESP_FLAG_FILE_META, RESP_FLAG_IS_FILE, RESP_FLAG_SEND, RESP_FLAG_SUPPRESS_ETAG,
     RESP_FLAG_SUPPRESS_POWERED_BY,
 };
 use crate::router::MethodCode;
 use crate::static_files::{
-    decode_sendfile_payload, etag_matches, serve_sendfile, write_simple_status, FileServeError,
+    decode_sendfile_payload, etag_matches, http_date_not_modified, serve_sendfile,
+    write_simple_status, FileServeError,
 };
 use bytes::Bytes;
 use std::time::Duration;
@@ -84,27 +85,27 @@ pub(super) async fn write_buffered_response<W: AsyncWrite + Unpin>(
         return write_error_close(writer, write_buf, 500, xpb).await;
     }
 
-    // Native ETag + 304 Not Modified
+    // Express `res.send`: ETag for any status and method, then `req.fresh` -> 304.
+    let send_mode = (flags & RESP_FLAG_SEND) != 0;
     let mut computed_etag: Option<String> = None;
-    let has_custom_etag = headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("etag"));
-
-    if !suppress_etag
-        && !has_custom_etag
-        && config.etag_mode != EtagMode::Off
-        && status == 200
-        && (method == MethodCode::Get || method == MethodCode::Head)
-        && !body.is_empty()
-    {
-        let tag = compute_etag(body, config.etag_mode == EtagMode::Weak);
-        if !no_cache {
-            if let Some(inm) = cond.if_none_match {
-                if etag_matches(inm, &tag) {
-                    append_not_modified(write_buf, &tag, headers, xpb, close_conn);
-                    return writer.write_all(write_buf).await;
-                }
-            }
+    let mut status = status;
+    if send_mode {
+        let custom_etag = header_value(headers, "etag");
+        if !suppress_etag && custom_etag.is_none() && config.etag_mode != EtagMode::Off {
+            computed_etag = Some(compute_etag(body, config.etag_mode == EtagMode::Weak));
         }
-        computed_etag = Some(tag);
+        let cacheable = (200..300).contains(&status) || status == 304;
+        if cacheable
+            && !no_cache
+            && (method == MethodCode::Get || method == MethodCode::Head)
+            && is_fresh(
+                cond,
+                custom_etag.or(computed_etag.as_deref()),
+                header_value(headers, "last-modified"),
+            )
+        {
+            status = 304;
+        }
     }
 
     let no_body_status = append_buffered_head(
@@ -117,9 +118,10 @@ pub(super) async fn write_buffered_response<W: AsyncWrite + Unpin>(
         xpb,
         computed_etag.as_deref(),
         close_conn,
+        send_mode,
     );
 
-    if !is_head && !no_body_status && !body.is_empty() {
+    if !is_head && !no_body_status && !(send_mode && status == 205) && !body.is_empty() {
         write_buf.extend_from_slice(body);
     }
 
@@ -191,44 +193,40 @@ async fn write_file_response<W: AsyncWrite + Unpin>(
     }
 }
 
-/// `304 Not Modified` for a matching `If-None-Match`: the app's headers minus the body framing.
-fn append_not_modified(
-    write_buf: &mut Vec<u8>,
-    tag: &str,
-    headers: &[(String, String)],
-    xpb: bool,
-    close_conn: bool,
-) {
-    write_buf.clear();
-    write_buf.extend_from_slice(b"HTTP/1.1 304 Not Modified\r\nETag: ");
-    write_buf.extend_from_slice(tag.as_bytes());
-    write_buf.extend_from_slice(b"\r\n");
-    if xpb {
-        write_buf.extend_from_slice(b"X-Powered-By: Express\r\n");
+/// Last value of a response header set from JS.
+fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .rev()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+/// The `fresh` package (what Express's `req.fresh` uses), minus the method/status checks.
+fn is_fresh(cond: CondHeaders<'_>, etag: Option<&str>, last_modified: Option<&str>) -> bool {
+    let inm = cond.if_none_match.map(str::trim).filter(|v| !v.is_empty());
+    let ims = cond
+        .if_modified_since
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    if inm.is_none() && ims.is_none() {
+        return false;
     }
-    let mut has_conn = false;
-    for (k, v) in headers {
-        if is_reason_header(k.as_bytes()) {
-            continue;
-        }
-        if k.eq_ignore_ascii_case("connection") {
-            has_conn = true;
-        }
-        if !k.eq_ignore_ascii_case("content-type")
-            && !k.eq_ignore_ascii_case("content-length")
-            && !k.eq_ignore_ascii_case("transfer-encoding")
-        {
-            write_buf.extend_from_slice(k.as_bytes());
-            write_buf.extend_from_slice(b": ");
-            write_buf.extend_from_slice(v.as_bytes());
-            write_buf.extend_from_slice(b"\r\n");
+    if let Some(inm) = inm {
+        if inm != "*" {
+            match etag {
+                Some(tag) if etag_matches(inm, tag) => {}
+                _ => return false,
+            }
         }
     }
-    if !has_conn {
-        push_connection_header(write_buf, close_conn);
+    if let Some(ims) = ims {
+        match last_modified {
+            Some(lm) if http_date_not_modified(ims, lm) => {}
+            _ => return false,
+        }
     }
-    write_date_header(write_buf);
-    write_buf.extend_from_slice(b"\r\n");
+    true
 }
 
 #[inline]
@@ -255,6 +253,7 @@ fn append_buffered_head(
     xpb: bool,
     computed_etag: Option<&str>,
     close_conn: bool,
+    send_mode: bool,
 ) -> bool {
     write_buf.clear();
     let mut nb = itoa::Buffer::new();
@@ -285,14 +284,29 @@ fn append_buffered_head(
             && cls.next().is_none()
     };
 
+    // `res.send` drops Content-Type / Content-Length on 204 and 304, and answers 205 with an
+    // empty body and `Content-Length: 0`.
+    let strip_entity = send_mode && (status == 204 || status == 304);
+    let reset_content = send_mode && status == 205;
+
     let mut has_ct = false;
-    if let Some(line) = content_type_line(ct_code) {
-        write_buf.extend_from_slice(line);
-        has_ct = true;
+    if !strip_entity {
+        if let Some(line) = content_type_line(ct_code) {
+            write_buf.extend_from_slice(line);
+            has_ct = true;
+        }
     }
 
     for (k, v) in headers {
         if is_reason_header(k.as_bytes()) {
+            continue;
+        }
+        if strip_entity
+            && (k.eq_ignore_ascii_case("content-type") || k.eq_ignore_ascii_case("content-length"))
+        {
+            continue;
+        }
+        if reset_content && k.eq_ignore_ascii_case("content-length") {
             continue;
         }
         if k.eq_ignore_ascii_case("content-type") {
@@ -333,7 +347,9 @@ fn append_buffered_head(
         push_connection_header(write_buf, close_conn);
     }
 
-    if !has_cl && !no_body_status {
+    if reset_content {
+        write_buf.extend_from_slice(b"Content-Length: 0\r\n");
+    } else if !has_cl && !no_body_status {
         write_buf.extend_from_slice(b"Content-Length: ");
         write_buf.extend_from_slice(nb.format(body.len()).as_bytes());
         write_buf.extend_from_slice(b"\r\n");
@@ -370,7 +386,7 @@ mod tests {
             &mut wb,
             status,
             CT_TEXT_PLAIN,
-            0,
+            RESP_FLAG_SEND,
             &headers,
             &Bytes::from_static(body),
             method,

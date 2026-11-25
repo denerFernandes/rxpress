@@ -192,16 +192,16 @@ export function safeJsonParse(
   str: string,
   options?: { strict?: boolean; reviver?: (key: string, value: unknown) => unknown }
 ): unknown {
-  const trimmed = str.trim();
-  if (trimmed.length === 0) {
+  // body-parser: only an empty body is `{}`; whitespace alone is a parse error.
+  if (str.length === 0) {
     return {};
   }
 
   const strict = options?.strict !== false;
   if (strict) {
-    const ch = trimmed.charCodeAt(0);
-    if (ch !== 0x7b && ch !== 0x5b) {
-      throw jsonSyntaxError(strictSyntaxError(str, trimmed[0]), str);
+    const first = /^[\x20\x09\x0a\x0d]*([^\x20\x09\x0a\x0d])/.exec(str)?.[1];
+    if (first !== '{' && first !== '[') {
+      throw jsonSyntaxError(strictSyntaxError(str, String(first)), str);
     }
   }
 

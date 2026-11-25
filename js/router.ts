@@ -1,3 +1,4 @@
+import { METHODS as HTTP_METHODS } from 'node:http';
 import type { Application } from './application.js';
 import { isForeignExpressApp, mountForeignApp } from './foreign.js';
 import { nativeMiddlewareMeta } from './middleware.js';
@@ -25,7 +26,47 @@ export type { CompiledPathMatcher, PathMatchResult } from './router/path-compile
 /** @internal */
 export { compilePathMatcher } from './router/path-compile.js';
 /** @internal */
-export { flattenHandlers, invokeHandler, normalizeThrownError } from './router/dispatch.js';
+export { flattenHandlers, invokeHandler, normalizeThrownError, rejectionError } from './router/dispatch.js';
+
+/** A middleware or route handler: a function, an rxpress Router or an rxpress app. */
+function isHandlerLike(h: unknown): boolean {
+  return (
+    typeof h === 'function' ||
+    (typeof h === 'object' &&
+      h !== null &&
+      ('__isRxRouter' in h || (h as { __isRxApp?: unknown }).__isRxApp === true))
+  );
+}
+
+/** Deep flatten that keeps `null` / `undefined`, so they can be rejected like Express does. */
+function flattenAll(input: unknown[], out: unknown[] = []): unknown[] {
+  for (const item of input) {
+    if (Array.isArray(item)) flattenAll(item, out);
+    else out.push(item);
+  }
+  return out;
+}
+
+/** router@2's argument checks for `route.VERB()` / `router.use()`. */
+function checkHandlers(list: unknown[]): void {
+  if (list.length === 0) throw new TypeError('argument handler is required');
+  for (const fn of list) {
+    if (!isHandlerLike(fn)) throw new TypeError('argument handler must be a function');
+  }
+}
+
+/** Splits `use()` arguments into the mount path(s) and the handlers, like router@2. */
+export function splitUseArgs(args: unknown[]): { path: unknown; hasPath: boolean; handlers: unknown[] } {
+  const first = args[0];
+  if (!isHandlerLike(first)) {
+    let arg = first;
+    while (Array.isArray(arg) && arg.length !== 0) arg = arg[0];
+    if (!isHandlerLike(arg)) {
+      return { path: first, hasPath: true, handlers: flattenAll(args.slice(1)) };
+    }
+  }
+  return { path: '/', hasPath: false, handlers: flattenAll(args) };
+}
 
 export class Route {
   public readonly path: PathParams;
@@ -86,7 +127,8 @@ export class Route {
 
   /** @internal */
   private _add(method: string, handlers: MiddlewareLike[]): this {
-    const flat = flattenHandlers(handlers);
+    const flat = flattenAll(handlers);
+    checkHandlers(flat);
     this.methods[method.toLowerCase()] = true;
     for (const fn of flat) {
       if (typeof fn === 'function') {
@@ -98,14 +140,21 @@ export class Route {
 
   public dispatch(req: RxRequest, res: RxResponse, done: NextFunction): void {
     const stack = this.stack;
-    const reqMethod = req.method;
+    const reqMethod = typeof req.method === 'string' ? req.method.toUpperCase() : req.method;
     let idx = 0;
 
     req.route = this;
+    let sync = 0;
 
     const next: NextFunction = (err?: unknown) => {
       if (err === 'route') return done();
       if (err === 'router') return done('router');
+      // router@2: yield to the event loop every 100 synchronous next() calls.
+      if (++sync > 100) {
+        sync = 0;
+        setImmediate(next, err);
+        return;
+      }
 
       const hasErr = err !== undefined && err !== null;
 
@@ -122,6 +171,7 @@ export class Route {
         if (!hasErr && isErrFn) continue;
 
         invokeHandler(layer.handle, hasErr ? err : undefined, req, res, next);
+        sync = 0;
         return;
       }
 
@@ -146,6 +196,12 @@ export class Router {
   }
 
   public param(name: string | string[], handler: ParamHandler): this {
+    if (!name) throw new TypeError('argument name is required');
+    if (typeof name !== 'string' && !Array.isArray(name)) {
+      throw new TypeError('argument name must be a string');
+    }
+    if (!handler) throw new TypeError('argument fn is required');
+    if (typeof handler !== 'function') throw new TypeError('argument fn must be a function');
     const names = Array.isArray(name) ? name : [name];
     for (let i = 0; i < names.length; i++) {
       const n = names[i];
@@ -192,24 +248,15 @@ export class Router {
   public use(path: PathParams, ...handlers: MiddlewareLike[]): this;
   public use(...handlers: MiddlewareLike[]): this;
   public use(...args: unknown[]): this {
-    let paths: Array<string | RegExp> = ['/'];
-    let handlerArgs = args;
-
-    const first = args[0];
-    if (
-      typeof first === 'string' ||
-      first instanceof RegExp ||
-      (Array.isArray(first) &&
-        first.length > 0 &&
-        (typeof first[0] === 'string' || first[0] instanceof RegExp))
-    ) {
-      paths = Array.isArray(first) ? (first as Array<string | RegExp>) : [first];
-      handlerArgs = args.slice(1);
-    }
+    const split = splitUseArgs(args);
+    checkHandlers(split.handlers);
+    const paths = (
+      split.hasPath ? (Array.isArray(split.path) ? split.path : [split.path]) : ['/']
+    ) as Array<string | RegExp>;
 
     // An app from another Express copy: mounted under `req.app` when first reached.
     const mountPath = paths.length === 1 ? paths[0] : paths;
-    const handlers = flattenHandlers(handlerArgs).map((h) =>
+    const handlers = (split.handlers as Array<AnyHandler | Router>).map((h) =>
       isForeignExpressApp(h) ? (mountForeignApp(h, mountPath, null) as unknown as AnyHandler) : h
     );
     for (const p of paths) {
@@ -220,7 +267,7 @@ export class Router {
       });
       for (const h of handlers) {
         const isRouter =
-          typeof h === 'object' && h !== null && '__isRxRouter' in h;
+          (typeof h === 'object' || typeof h === 'function') && h !== null && '__isRxRouter' in h;
         const isSubApp =
           (typeof h === 'function' || (typeof h === 'object' && h !== null)) &&
           (h as { __isRxApp?: unknown }).__isRxApp === true;
@@ -258,7 +305,8 @@ export class Router {
 
   /** @internal */
   private _addMethod(method: string, path: PathParams, handlers: MiddlewareLike[]): this {
-    const flat = flattenHandlers(handlers);
+    const flat = flattenAll(handlers) as Array<AnyHandler | Router>;
+    checkHandlers(flat);
     const paths = Array.isArray(path) ? path : [path];
     for (const p of paths) {
       const matcher = compilePathMatcher(p, {
@@ -366,6 +414,45 @@ export class Router {
   }
 }
 
+// Every other method Node knows (`app.acl()`, `router.propfind()`, `route['m-search']()`...),
+// as Express and router@2 define them from `http.METHODS`.
+/** @internal */
+export const EXTRA_METHODS = HTTP_METHODS.map((m) => m.toLowerCase()).filter(
+  (m) => !(m in Route.prototype)
+);
+for (const method of EXTRA_METHODS) {
+  const upper = method.toUpperCase();
+  Object.defineProperty(Route.prototype, method, {
+    configurable: true,
+    writable: true,
+    value: function (this: Route, ...handlers: MiddlewareLike[]) {
+      return (this as unknown as { _add(m: string, h: MiddlewareLike[]): Route })._add(upper, handlers);
+    },
+  });
+  Object.defineProperty(Router.prototype, method, {
+    configurable: true,
+    writable: true,
+    value: function (this: Router, path: PathParams, ...handlers: MiddlewareLike[]) {
+      return (
+        this as unknown as { _addMethod(m: string, p: PathParams, h: MiddlewareLike[]): Router }
+      )._addMethod(upper, path, handlers);
+    },
+  });
+}
+
+/**
+ * `express.Router()`: like router@2, the router is itself a middleware function
+ * (`router(req, res, next)`) that also carries every Router method.
+ */
 export function createRouter(options?: RouterOptions): Router {
-  return new Router(options);
+  const inner = new Router(options);
+  const router = function router(req: RxRequest, res: RxResponse, next: NextFunction): void {
+    (router as unknown as Router).handle(req, res, next);
+  };
+  Object.setPrototypeOf(router, Router.prototype);
+  const fields = Object.keys(inner) as Array<keyof Router>;
+  for (let i = 0; i < fields.length; i++) {
+    (router as unknown as Record<string, unknown>)[fields[i]] = inner[fields[i]];
+  }
+  return router as unknown as Router;
 }

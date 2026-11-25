@@ -12,7 +12,7 @@ mod validate;
 
 pub use batch::{
     dispatch_response_batch, CT_HTML, CT_JSON, CT_OCTET_STREAM, CT_TEXT_PLAIN, RESP_FLAG_FILE_META,
-    RESP_FLAG_IS_FILE, RESP_FLAG_SUPPRESS_ETAG, RESP_FLAG_SUPPRESS_POWERED_BY,
+    RESP_FLAG_IS_FILE, RESP_FLAG_SEND, RESP_FLAG_SUPPRESS_ETAG, RESP_FLAG_SUPPRESS_POWERED_BY,
 };
 pub use raw_response::{
     append_raw_http_with_close, append_raw_http_with_connection, build_simple_raw_response,

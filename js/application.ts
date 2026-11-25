@@ -5,7 +5,7 @@ import { isForeignExpressApp, mountForeignApp } from './foreign.js';
 import { View, type ViewEngine } from './view.js';
 import { type EventListenerFn, RxRequest } from './request.js';
 import { RxResponse } from './response.js';
-import { flattenHandlers, Router, type Route } from './router.js';
+import { EXTRA_METHODS, Router, splitUseArgs, type Route } from './router.js';
 import { parseTrustProxy, type TrustProxyFn } from './security.js';
 import type {
   AddressInfo,
@@ -331,16 +331,10 @@ export class Application {
   public use(path: PathParams, ...handlers: MiddlewareLike[]): this;
   public use(...handlers: MiddlewareLike[]): this;
   public use(...args: unknown[]): this {
-    const first = args[0];
-    const hasPath =
-      typeof first === 'string' ||
-      first instanceof RegExp ||
-      (Array.isArray(first) &&
-        first.length > 0 &&
-        (typeof first[0] === 'string' || first[0] instanceof RegExp));
-    const flat = flattenHandlers(hasPath ? args.slice(1) : args);
+    const { path: first, hasPath, handlers: flat } = splitUseArgs(args);
+    if (flat.length === 0) throw new TypeError('app.use() requires a middleware function');
     // Apps from another Express copy are mounted here, as Express mounts its sub-apps.
-    let routed: unknown[] = args;
+    let routed: unknown[] = hasPath ? [first, ...flat] : flat;
     if (flat.some(isForeignExpressApp)) {
       const mounted = flat.map((h) =>
         isForeignExpressApp(h) ? mountForeignApp(h, hasPath ? first : '/', this) : h
@@ -365,6 +359,10 @@ export class Application {
   }
 
   public param(name: string | string[], handler: ParamHandler): this {
+    if (Array.isArray(name)) {
+      for (const n of name) this.param(n, handler);
+      return this;
+    }
     this._router.param(name, handler);
     return this;
   }
@@ -536,6 +534,17 @@ Object.setPrototypeOf(Application.prototype, Function.prototype);
  * `express()`: a function `app(req, res, next)` carrying the whole Application API.
  * The state lives as own properties of the function, exactly as on an Application instance.
  */
+for (const method of EXTRA_METHODS) {
+  Object.defineProperty(Application.prototype, method, {
+    configurable: true,
+    writable: true,
+    value: function (this: Application, path: PathParams, ...handlers: MiddlewareLike[]) {
+      (this._router as unknown as Record<string, (...a: unknown[]) => unknown>)[method](path, ...handlers);
+      return this;
+    },
+  });
+}
+
 export function createApplication(): Application {
   const app = function app(
     req: IncomingMessage | RxRequest,

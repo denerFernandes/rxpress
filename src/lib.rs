@@ -2,6 +2,7 @@ mod body;
 mod config;
 mod date;
 mod http_parse;
+mod mime_table;
 mod protocol;
 mod reqbody;
 mod router;
@@ -129,6 +130,13 @@ impl Drop for ServerLifecycle {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+/// Content-Type for a file extension (`"js"`, `"PNG"`), from the same table as `mime-types`;
+/// `null` when unknown. Backs `res.type()` so it agrees with static files and `res.sendFile()`.
+#[napi]
+pub fn mime_content_type(ext: String) -> Option<String> {
+    mime_table::content_type_for_extension(&ext).map(str::to_owned)
 }
 
 #[napi]

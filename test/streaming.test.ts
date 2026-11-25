@@ -133,6 +133,6 @@ describe('Streaming, SSE, and Large File Delivery', () => {
     // Download header
     const rDl = await fetch(`${base}/dl`);
     expect(rDl.status).toBe(200);
-    expect(rDl.headers.get('content-disposition')).toBe('attachment; filename="report.bin"');
+    expect(rDl.headers.get('content-disposition')).toBe('attachment; filename=report.bin');
   });
 });

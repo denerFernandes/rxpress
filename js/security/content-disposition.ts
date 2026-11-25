@@ -2,23 +2,31 @@
 
 const CD_ATTR_CHAR_RE = /[\x00-\x20"'()*,/:;<=>?@[\\\]{}\x7f]/g;
 
+const CD_TOKEN_RE = /^[!#$%&'*+.0-9A-Z^_`a-z|~-]+$/;
+const CD_ASCII_TEXT_RE = /^[\x20-\x7e]*$/;
+
+/** One parameter: a token as is, anything else as a quoted-string (content-disposition 2). */
+function cdParam(name: string, value: string): string {
+  return CD_TOKEN_RE.test(value)
+    ? `; ${name}=${value}`
+    : `; ${name}="${value.replace(/[\\"]/g, '\\$&')}"`;
+}
+
 /**
- * `attachment; filename="<ascii fallback>"[; filename*=UTF-8''<pct-encoded>]`.
- * The quoted fallback is pure printable ASCII (the engine writes header values as UTF-8, so
- * Latin-1 bytes would not survive); the exact name always travels in `filename*` when needed.
+ * `content-disposition` 2 `create()`: `filename` alone when the name is plain ASCII, otherwise
+ * an ASCII fallback (`?` for other characters) plus the exact name in `filename*`.
  */
 export function contentDisposition(filename?: string, type = 'attachment'): string {
   if (filename === undefined) return type;
-  const name = filename;
-  const fallback = name.replace(/[^\x20-\x7e]/g, '?');
-  let out = `${type}; filename="${fallback.replace(/([\\"])/g, '\\$1')}"`;
-  if (fallback !== name || /%[0-9A-Fa-f]{2}/.test(name)) {
-    const encoded = encodeURIComponent(name).replace(
-      CD_ATTR_CHAR_RE,
-      (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')
-    );
-    out += `; filename*=UTF-8''${encoded}`;
+  if (CD_ASCII_TEXT_RE.test(filename) && !/%[0-9A-Fa-f]{2}/.test(filename)) {
+    return type + cdParam('filename', filename);
   }
-  return out;
+  const encoded = encodeURIComponent(filename).replace(
+    CD_ATTR_CHAR_RE,
+    (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')
+  );
+  return (
+    type + cdParam('filename', filename.replace(/[^\x20-\x7e]/g, '?')) + `; filename*=UTF-8''${encoded}`
+  );
 }
 

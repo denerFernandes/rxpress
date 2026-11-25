@@ -857,9 +857,9 @@ describe('Static Files, sendFile, download & Range', () => {
     expect(rFastTrav.status).toBe(403);
     expect(await rFastTrav.json()).toEqual({ caughtByErrorMiddleware: true, status: 403 });
 
+    // Like send: `sub/../ten.txt` normalizes to `ten.txt`, still inside the root.
     const rSubDotDot = await fetch(`${base}/sub-dotdot`);
-    expect(rSubDotDot.status).toBe(403);
-    expect(await rSubDotDot.json()).toEqual({ caughtCb: true, status: 403, headersSent: false });
+    expect(rSubDotDot.status).toBe(200);
   });
 
   it('survives parallel multi-connection TL_STATIC_CACHE churn across >300 files without corruption', async () => {

@@ -349,7 +349,8 @@ impl<S: ConnStream> Conn<'_, '_, S> {
                     range: str_at(hb, item.range),
                     if_range: str_at(hb, item.if_range),
                 };
-                let no_cache = item.if_none_match.is_some() && header_block_has_no_cache(hb);
+                let no_cache = (item.if_none_match.is_some() || item.if_modified_since.is_some())
+                    && header_block_has_no_cache(hb);
 
                 if write_buffered_response(
                     &mut *self.stream,

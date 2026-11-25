@@ -495,6 +495,59 @@ describe('req & res APIs, Content Negotiation, Cookies & App Settings', () => {
     expect(offAgain.status).toBe(200);
   });
 
+  it('a middleware error reaches the error handler registered before the route', async () => {
+    const app = createApp();
+    app.use((req: E2ERequest, _res: E2EResponse, next: E2ENextFunction) => {
+      next(req.get('x-fail') ? Object.assign(new Error('boom'), { status: 418 }) : undefined);
+    });
+    app.use(
+      (err: Error & { status?: number }, _req: E2ERequest, res: E2EResponse, _next: E2ENextFunction) => {
+        res.status(err.status ?? 500).send(`handled: ${err.message}`);
+      }
+    );
+    app.get('/thing', (_req: E2ERequest, res: E2EResponse) => {
+      res.send('ok');
+    });
+
+    const srv = await trackServer(await startServer(app));
+    const ok = await httpRequest(srv.baseUrl, '/thing');
+    expect(ok.status).toBe(200);
+    expect(ok.text).toBe('ok');
+    const failed = await httpRequest(srv.baseUrl, '/thing', { headers: { 'X-Fail': '1' } });
+    expect(failed.status).toBe(418);
+    expect(failed.text).toBe('handled: boom');
+  });
+
+  it('res.statusCode reports 304 when res.send answers a conditional request', async () => {
+    const app = createApp();
+    const finished: number[] = [];
+    app.use((_req: E2ERequest, res: E2EResponse, next: E2ENextFunction) => {
+      res.on('finish', () => finished.push(res.statusCode));
+      next();
+    });
+    app.get('/json', (_req: E2ERequest, res: E2EResponse) => {
+      res.json({ a: 1 });
+    });
+    app.get('/text', (_req: E2ERequest, res: E2EResponse) => {
+      res.set('X-Extra', '1').send('hello');
+    });
+
+    const srv = await trackServer(await startServer(app));
+    for (const path of ['/json', '/text']) {
+      const first = await httpRequest(srv.baseUrl, path);
+      const etag = String(first.headers.etag);
+      const cached = await httpRequest(srv.baseUrl, path, { headers: { 'If-None-Match': etag } });
+      expect(cached.status).toBe(304);
+      expect(cached.headers.etag).toBe(etag);
+      expect(cached.headers['content-type']).toBeUndefined();
+      expect(cached.text).toBe('');
+      const stale = await httpRequest(srv.baseUrl, path, { headers: { 'If-None-Match': '"other"' } });
+      expect(stale.status).toBe(200);
+    }
+    await new Promise((r) => setTimeout(r, 20));
+    expect(finished).toEqual([200, 304, 200, 200, 304, 200]);
+  });
+
   itRxpress(
     'built-in req.cookies parses Cookie header without cookie-parser',
     async () => {

@@ -23,7 +23,6 @@ crossbeam-queue = "0.3"
 parking_lot = "0.12"
 rustc-hash = "2"
 futures-util = "0.3"
-mime_guess = "2"
 httpdate = "1"
 socket2 = { version = "0.5", features = ["all"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

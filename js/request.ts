@@ -100,6 +100,8 @@ export class RxRequest {
   /** @internal */ public _bodyLen: number;
   /** @internal */ public _bodyMode: number;
   /** @internal */ public _isTls: boolean;
+  /** @internal Request has If-None-Match / If-Modified-Since (set by the engine). */
+  public _conditional = false;
   /** @internal */ private _sliceStart = 0;
   /** @internal */ private _sliceEnd = 0;
   /** @internal */ private readonly _rootApp: Application;

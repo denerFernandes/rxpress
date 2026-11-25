@@ -22,6 +22,9 @@ pub struct PendingRequest {
     pub body: Bytes,
     /// The connection was handed to JS for an `'upgrade'` event (flag 0x04).
     pub upgrade: bool,
+    /// The request carries `If-None-Match` or `If-Modified-Since` (flag 0x08), so a `res.send`
+    /// may become a 304; JS then resolves freshness itself to keep `res.statusCode` accurate.
+    pub conditional: bool,
 }
 
 impl PendingRequest {
@@ -129,7 +132,8 @@ impl PendingRequest {
 
         let flags: u8 = (if self.is_tls { 0x01 } else { 0 })
             | (if !self.body.is_empty() { 0x02 } else { 0 })
-            | (if self.upgrade { 0x04 } else { 0 });
+            | (if self.upgrade { 0x04 } else { 0 })
+            | (if self.conditional { 0x08 } else { 0 });
         dst[p] = self.method as u8;
         dst[p + 1] = flags;
         dst[p + 2] = self.body_mode as u8;
@@ -234,6 +238,7 @@ mod tests {
             raw_headers: Bytes::new(),
             body: Bytes::new(),
             upgrade: false,
+            conditional: false,
         };
         assert!(req.can_encode());
         let mut buf = vec![0u8; req.encoded_size()];

@@ -16,7 +16,9 @@ mod sendfile;
 // Re-exports keep every pre-split `crate::static_files::X` path valid, even those the crate
 // itself does not currently import.
 #[allow(unused_imports)]
-pub use conditional::{etag_matches, if_range_matches, parse_single_range, RangeParseResult};
+pub use conditional::{
+    etag_matches, http_date_not_modified, if_range_matches, parse_single_range, RangeParseResult,
+};
 #[allow(unused_imports)]
 pub use file_response::write_file_response_from_open;
 pub use mount::StaticMount;

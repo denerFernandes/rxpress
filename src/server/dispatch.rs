@@ -320,6 +320,7 @@ impl<S: ConnStream> Conn<'_, '_, S> {
             raw_headers,
             body,
             upgrade: false,
+            conditional: meta.if_none_match.is_some() || meta.if_modified_since.is_some(),
         };
         let slot_future = match self.admit(batch, meta, pending, plan) {
             Admit::Queued(f) => f,

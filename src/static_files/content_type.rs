@@ -1,10 +1,10 @@
 use std::path::Path;
 
+/// `send`: `mime-types.contentType(extname(path))`, else `application/octet-stream`.
 pub(super) fn detect_content_type(path: &Path) -> String {
-    let mime = mime_guess::from_path(path).first_or_octet_stream();
-    if mime.type_() == "text" || mime == "application/javascript" {
-        format!("{mime}; charset=utf-8")
-    } else {
-        mime.to_string()
-    }
+    path.extension()
+        .and_then(|e| e.to_str())
+        .and_then(crate::mime_table::content_type_for_extension)
+        .unwrap_or("application/octet-stream")
+        .to_owned()
 }

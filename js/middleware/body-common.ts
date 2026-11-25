@@ -44,6 +44,38 @@ export function normalizeTypes(
 
 // ---- body-parser@2 shared reading semantics ----
 
+/** body-parser: `verify` may be omitted or false, anything else must be a function. */
+export function checkVerifyOption(verify: unknown): void {
+  if (verify !== undefined && verify !== false && typeof verify !== 'function') {
+    throw new TypeError('option verify must be function');
+  }
+}
+
+/** type-is `hasBody`: a Transfer-Encoding header or a numeric Content-Length. */
+function hasBody(req: RxRequest): boolean {
+  if (req._bodyLen > 0 || req._isStreamedBody()) return true;
+  const h = req.headers;
+  if (h['transfer-encoding'] !== undefined) return true;
+  const cl = h['content-length'];
+  return cl !== undefined && !Number.isNaN(Number(cl));
+}
+
+/**
+ * Whether this parser handles the request: the engine already matched it (`nativeMode`), or it
+ * has a body whose type matches. As in body-parser, a custom `type` function is never called
+ * for a request without a body.
+ */
+export function shouldParse(
+  req: RxRequest,
+  nativeMode: number,
+  list: string[],
+  customFn: ((req: RxRequest) => boolean) | undefined,
+): boolean {
+  if (req._bodyMode === nativeMode) return true;
+  if (!hasBody(req)) return false;
+  return customFn ? Boolean(customFn(req)) : Boolean(req.is(...list));
+}
+
 export type HttpError = Error & {
   status: number;
   statusCode: number;
@@ -141,11 +173,12 @@ export function inflateBody(
 }
 
 /** body-parser wraps `verify` failures in a 403 unless the thrown error carries its own status. */
-export function runVerify(fn: () => void): void {
+export function runVerify(fn: () => void, body: Buffer): void {
   try {
     fn();
   } catch (err) {
     const e = (err instanceof Error ? err : new Error(String(err))) as HttpError;
+    if (!('body' in e)) e.body = body;
     if (typeof e.status !== 'number' && typeof e.statusCode !== 'number') {
       e.status = 403;
       e.statusCode = 403;
@@ -166,8 +199,13 @@ export function decodeCharset(buf: Buffer, charset: string): string {
     return buf.toString('latin1');
   } else {
     let decoder: { decode(input: Uint8Array): string };
+    let label = charset;
+    // iconv-lite: plain "utf-16" follows the BOM (big-endian when it says so), else LE.
+    if (charset === 'utf-16' || charset === 'utf16') {
+      label = buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff ? 'utf-16be' : 'utf-16le';
+    }
     try {
-      decoder = new TextDecoder(charset);
+      decoder = new TextDecoder(label);
     } catch {
       throw unsupportedCharset(charset);
     }
@@ -193,6 +231,20 @@ export function readParsedBody(
   if (body.length > limit) {
     return cb(bodyError(413, 'request entity too large', 'entity.too.large', { limit }));
   }
+  // raw-body: the bytes read must match a declared Content-Length (identity encoding only).
+  const declared = req.headers['content-length'];
+  if (declared !== undefined && req.headers['content-encoding'] === undefined) {
+    const expected = Number(declared);
+    if (!Number.isNaN(expected) && expected !== body.length) {
+      return cb(
+        bodyError(400, 'request size did not match content length', 'request.size.invalid', {
+          expected,
+          length: expected,
+          received: body.length,
+        }),
+      );
+    }
+  }
   let called = false;
   const after = (err: Error | null, raw?: Buffer): void => {
     called = true;
@@ -210,7 +262,7 @@ export function readParsedBody(
           decodeCharset(Buffer.alloc(0), charset);
         }
         const buf = raw!;
-        runVerify(() => verify(req as never, res as never, buf, charset ?? 'binary'));
+        runVerify(() => verify(req as never, res as never, buf, charset ?? 'binary'), buf);
       }
       out = charset === null ? raw! : decodeCharset(raw!, charset);
     } catch (e) {

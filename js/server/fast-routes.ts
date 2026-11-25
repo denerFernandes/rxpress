@@ -16,6 +16,11 @@ export interface CompiledFastRoute {
   isAsyncDirect: boolean;
   routeObj: Route | undefined;
   nextLayerIdx: number;
+  /**
+   * Router stack index to resume from when `chain[k]` fails: an app-level middleware's error
+   * must reach the error handlers registered between it and the route, as in Express.
+   */
+  errorNextIdx: number[];
 }
 
 type Seg = { kind: 'lit'; val: string } | { kind: 'param' } | { kind: 'wild' };
@@ -108,6 +113,8 @@ interface CompileState {
   seenBodyRouters: Set<Router>;
   earlierRoutes: EarlierRoute[];
   globalPreMiddlewares: AnyHandler[];
+  /** Stack index right after each entry of `globalPreMiddlewares`. */
+  globalPreNextIdx: number[];
   seenJsMiddleware: boolean;
   seenRoute: boolean;
   blockedFastRouting: boolean;
@@ -141,6 +148,7 @@ export function compileIntoNative(
     seenBodyRouters: new Set<Router>([router]),
     earlierRoutes: [],
     globalPreMiddlewares: [],
+    globalPreNextIdx: [],
     seenJsMiddleware: false,
     seenRoute: false,
     blockedFastRouting: router.params.size > 0,
@@ -163,7 +171,7 @@ function compileLayer(st: CompileState, layer: Layer, i: number): void {
 
   // 3. Track middleware & sub-router layers
   if (layer.method === null) {
-    trackMiddlewareLayer(st, layer);
+    trackMiddlewareLayer(st, layer, i);
     return;
   }
 
@@ -213,13 +221,14 @@ function tryAddNativeStatic(st: CompileState, layer: Layer): boolean {
   return false;
 }
 
-function trackMiddlewareLayer(st: CompileState, layer: Layer): void {
+function trackMiddlewareLayer(st: CompileState, layer: Layer, i: number): void {
   if (layer.isErrorHandler) {
     return;
   }
   st.seenJsMiddleware = true;
   if (!layer.isRouter && layer.path === '/') {
     st.globalPreMiddlewares.push(layer.handle as AnyHandler);
+    st.globalPreNextIdx.push(i + 1);
   } else if (layer.isRouter) {
     st.blockedFastRouting = true;
   } else {
@@ -284,6 +293,7 @@ function addFastRoute(st: CompileState, layer: Layer, i: number): boolean {
   if (!accepted) return false;
 
   const chain: AnyHandler[] = globalPreMiddlewares.slice();
+  const preNext = st.globalPreNextIdx;
   let hasRouteErrorHandler = false;
   if (layer.isRoute && layer.route) {
     for (const sub of layer.route.stack) {
@@ -304,6 +314,7 @@ function addFastRoute(st: CompileState, layer: Layer, i: number): boolean {
       isAsyncDirect: false,
       routeObj: layer.route,
       nextLayerIdx: i + 1,
+      errorNextIdx: [...preNext, i + 1],
     });
   } else {
     const directFn = chain.length === 1 ? (chain[0] as RequestHandler) : null;
@@ -316,6 +327,7 @@ function addFastRoute(st: CompileState, layer: Layer, i: number): boolean {
       isAsyncDirect,
       routeObj: layer.route,
       nextLayerIdx: i + 1,
+      errorNextIdx: chain.map((_, k) => (k < preNext.length ? preNext[k] : i + 1)),
     });
   }
   return true;

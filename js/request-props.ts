@@ -83,6 +83,10 @@ export function isXhr(req: RxRequest): boolean {
 }
 
 /** @internal */
+function headerString(v: string | number | string[] | undefined): string | undefined {
+  return v === undefined ? undefined : Array.isArray(v) ? v.join(', ') : String(v);
+}
+
 export function isFresh(req: RxRequest): boolean {
   const m = req.method;
   if (m !== 'GET' && m !== 'HEAD' && m !== 'QUERY') return false;
@@ -92,8 +96,8 @@ export function isFresh(req: RxRequest): boolean {
     req.get('cache-control'),
     req.get('if-none-match'),
     req.get('if-modified-since'),
-    req.res.get('etag'),
-    req.res.get('last-modified')
+    headerString(req.res.getHeader('etag')),
+    headerString(req.res.getHeader('last-modified'))
   );
 }
 

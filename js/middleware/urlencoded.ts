@@ -10,6 +10,8 @@ import {
   requestCharset,
   unsupportedCharset,
   withParsedBody,
+  shouldParse,
+  checkVerifyOption,
 } from './body-common.js';
 
 /**
@@ -19,10 +21,11 @@ export function urlencoded(options: UrlencodedOptions = {}): RequestHandler {
   const limit = parseSizeLimit(options.limit, 100 * 1024);
   const extended = Boolean(options.extended);
   const inflate = options.inflate !== false;
+  checkVerifyOption(options.verify);
   const parameterLimit = options.parameterLimit ?? 1000;
   if (
     typeof parameterLimit !== 'number' ||
-    !Number.isFinite(parameterLimit) ||
+    Number.isNaN(parameterLimit) ||
     parameterLimit < 1
   ) {
     throw new TypeError('option parameterLimit must be a positive number');
@@ -34,16 +37,7 @@ export function urlencoded(options: UrlencodedOptions = {}): RequestHandler {
       return next(createHttpError(413, 'request entity too large', 'entity.too.large'));
     }
 
-    const matches = customFn
-      ? customFn(req)
-      : req._bodyMode === BODY_MODE_URLENCODED
-        ? true
-        : req._bodyLen === 0 &&
-            !req._isStreamedBody() &&
-            (req.method === 'GET' || req.method === 'HEAD')
-          ? false
-          : Boolean(req.is(...list));
-    if (!matches) {
+    if (!shouldParse(req, BODY_MODE_URLENCODED, list, customFn)) {
       return next();
     }
 

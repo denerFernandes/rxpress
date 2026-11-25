@@ -10,6 +10,8 @@ import {
   requestCharset,
   unsupportedCharset,
   withParsedBody,
+  shouldParse,
+  checkVerifyOption,
 } from './body-common.js';
 
 /**
@@ -19,6 +21,7 @@ export function json(options: JsonOptions = {}): RequestHandler {
   const limit = parseSizeLimit(options.limit, 100 * 1024);
   const strict = options.strict !== false;
   const inflate = options.inflate !== false;
+  checkVerifyOption(options.verify);
   const { list, customFn } = normalizeTypes(options.type, [
     'application/json',
     'application/*+json',
@@ -29,16 +32,7 @@ export function json(options: JsonOptions = {}): RequestHandler {
       return next(createHttpError(413, 'request entity too large', 'entity.too.large'));
     }
 
-    const matches = customFn
-      ? customFn(req)
-      : req._bodyMode === BODY_MODE_JSON
-        ? true
-        : req._bodyLen === 0 &&
-            !req._isStreamedBody() &&
-            (req.method === 'GET' || req.method === 'HEAD')
-          ? false
-          : Boolean(req.is(...list));
-    if (!matches) {
+    if (!shouldParse(req, BODY_MODE_JSON, list, customFn)) {
       return next();
     }
 

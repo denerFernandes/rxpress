@@ -218,7 +218,7 @@ export class RxResponse {
     return this.set(field, val);
   }
 
-  public get(field: string): string | undefined {
+  public get(field: string): string | string[] | undefined {
     return getField(this, field);
   }
 
@@ -235,7 +235,7 @@ export class RxResponse {
     return this.type(type);
   }
 
-  public vary(field: string): this {
+  public vary(field: string | string[]): this {
     addVary(this, field);
     return this;
   }
@@ -272,7 +272,9 @@ export class RxResponse {
     return this;
   }
 
-  public format(obj: Record<string, () => unknown>): this {
+  public format(
+    obj: Record<string, (req: RxRequest, res: RxResponse, next: (err?: unknown) => void) => unknown>
+  ): this {
     formatResponse(this, obj);
     return this;
   }

@@ -32,6 +32,8 @@ export const RESP_FLAG_IS_FILE = 0x02;
 export const RESP_FLAG_SUPPRESS_POWERED_BY = 0x04;
 export const RESP_FLAG_SUPPRESS_ETAG = 0x08;
 export const RESP_FLAG_FILE_META = 0x10;
+/** `res.send` semantics in the engine: ETag for any status, 304 when fresh, 204/205/304 stripping. */
+export const RESP_FLAG_SEND = 0x20;
 
 const MAX_BATCH_BUFFER_BEFORE_FLUSH = 16 * 1024 * 1024;
 const SHRINK_STREAK_THRESHOLD = 16;

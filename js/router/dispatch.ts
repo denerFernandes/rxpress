@@ -5,9 +5,14 @@ import type { ErrorRequestHandler, NextFunction, ParamHandler, RequestHandler } 
 import type { AnyHandler, Layer } from './layer.js';
 import type { PathMatchResult } from './path-compile.js';
 
-/** @internal */
+/** @internal Internal failures while advancing the stack always carry an error. */
 export function normalizeThrownError(err: unknown): unknown {
   return err === undefined || err === null ? new Error('Unhandled error') : err;
+}
+
+/** @internal router@2: a promise rejected with a falsy value still counts as an error. */
+export function rejectionError(err: unknown): unknown {
+  return err || new Error('Rejected promise');
 }
 
 /** @internal */
@@ -57,19 +62,19 @@ export function invokeHandler(
     if (ret && typeof (ret as PromiseLike<unknown>).then === 'function') {
       (ret as PromiseLike<unknown>).then(undefined, (rejected: unknown) => {
         if (!res.writableEnded) {
-          safeNext(normalizeThrownError(rejected));
+          safeNext(rejectionError(rejected));
         }
       });
     }
   } catch (thrown) {
     if (!res.writableEnded) {
-      safeNext(normalizeThrownError(thrown));
+      safeNext(thrown);
     }
   }
 }
 
 function recordOptionsMethods(req: RxRequest, layer: Layer): void {
-  if (req._optionsMethods === null) {
+  if (req._optionsMethods == null) {
     req._optionsMethods = [];
   }
   const add = (m: string) => {
@@ -97,18 +102,57 @@ function recordOptionsIfMatched(req: RxRequest, layer: Layer, currentPath: strin
   if (optMatch) recordOptionsMethods(req, layer);
 }
 
-/** Mounted middleware/sub-router: move the matched prefix from `req.url` to `req.baseUrl`. */
-function stripMountPrefix(
-  req: RxRequest,
-  matchedPath: string,
-  parentBaseUrl: string,
-  parentUrl: string
-): void {
-  const prefix = matchedPath.endsWith('/') ? matchedPath.slice(0, -1) : matchedPath;
-  req.baseUrl = parentBaseUrl + prefix;
-  const stripped = parentUrl.slice(prefix.length);
-  req.url = stripped.startsWith('/') ? stripped : '/' + stripped;
+/** router@2 `getProtohost`: the `scheme://host` of an absolute-form URL, if any. */
+function protohostOf(url: string): string {
+  if (url.length === 0 || url.charCodeAt(0) === 0x2f) return '';
+  const q = url.indexOf('?');
+  const fqdn = url.slice(0, q === -1 ? url.length : q).indexOf('://');
+  if (fqdn === -1) return '';
+  const slash = url.indexOf('/', fqdn + 3);
+  return slash === -1 ? url : url.slice(0, slash);
 }
+
+/**
+ * Pathname the layers match against; `undefined` for a missing or blank URL (router@2 then
+ * skips the whole stack). Requests built by the engine take their cached `req.path`.
+ */
+function pathOf(req: RxRequest, url: string | undefined, protohost: string): string | undefined {
+  if (typeof url !== 'string' || url.length === 0) return undefined;
+  if (protohost === '') {
+    const p = (req as { path?: unknown }).path;
+    if (typeof p === 'string') return p;
+  }
+  const q = url.indexOf('?');
+  const path = url.slice(protohost.length, q === -1 ? url.length : q);
+  return path.length === 0 ? '/' : path;
+}
+
+/**
+ * router@2 `mergeParams`: parent params first, then the layer's; numeric (unnamed-capture)
+ * indices of the layer are shifted after the parent's so neither side is lost.
+ */
+function mergeParams(
+  params: Record<string, string>,
+  parent: Record<string, string> | undefined
+): Record<string, string> {
+  const obj: Record<string, string> = Object.assign(Object.create(null), parent);
+  if (typeof parent !== 'object' || parent === null || !('0' in params) || !('0' in parent)) {
+    return Object.assign(obj, params);
+  }
+  let i = 0;
+  let o = 0;
+  while (String(i) in params) i++;
+  while (String(o) in parent) o++;
+  const shifted: Record<string, string> = Object.assign(Object.create(null), params);
+  for (i--; i >= 0; i--) {
+    shifted[String(i + o)] = params[String(i)];
+    if (i < o) delete shifted[String(i)];
+  }
+  return Object.assign(obj, shifted);
+}
+
+/** router@2 yields to the event loop every 100 synchronous `next()` calls. */
+const MAX_SYNC_STACK = 100;
 
 /**
  * Body of `Router#handle`: execute `router`'s middleware & route stack on `(req, res)`
@@ -125,15 +169,19 @@ export function handleRouter(
 ): void {
   const stack = router.stack;
   let idx = startIndex;
+  // router@2 records the URL first seen (requests not built by the engine have none).
+  if (!req.originalUrl) (req as { originalUrl?: string }).originalUrl = req.url;
   const parentParams = req.params;
-  const parentBaseUrl = req.baseUrl;
-  const parentUrl = req.url;
+  const parentBaseUrl = req.baseUrl || '';
   const parentApp = req.app;
-  const paramCalled = new Map<string, string>();
+  const paramCalled = new Map<string, ParamCall>();
+  // Mount prefix moved from `req.url` to `req.baseUrl` for the current layer (router@2).
+  let removed = '';
+  let slashAdded = false;
+  let sync = 0;
 
   const restore = () => {
     req.baseUrl = parentBaseUrl;
-    req.url = parentUrl;
     req.params = parentParams;
     req.app = parentApp;
     res.app = parentApp;
@@ -151,90 +199,120 @@ export function handleRouter(
   };
 
   const step = (err?: unknown): void => {
-    let layerError = err === 'route' || err === null ? undefined : err;
+    let layerError: unknown = err === 'route' || err === null ? undefined : err;
+
+    // Put back what the previous layer's mount stripped; keep any rewrite it made.
+    if (slashAdded) {
+      req.url = req.url.slice(1);
+      slashAdded = false;
+    }
+    if (removed.length !== 0) {
+      const ph = protohostOf(req.url);
+      req.baseUrl = parentBaseUrl;
+      req.url = ph + removed + req.url.slice(ph.length);
+      removed = '';
+    }
 
     if (layerError === 'router') {
       restore();
       return out();
     }
 
-    if (idx >= stack.length) {
+    if (++sync > MAX_SYNC_STACK) {
+      sync = 0;
+      setImmediate(next, err);
+      return;
+    }
+
+    const url = req.url;
+    const protohost = typeof url === 'string' ? protohostOf(url) : '';
+    const currentPath = pathOf(req, url, protohost);
+    if (currentPath === undefined) {
       restore();
       return out(layerError);
     }
 
-    const layer = stack[idx++];
+    const m = typeof req.method === 'string' ? req.method.toUpperCase() : req.method;
+    // Skip non-matching layers in a loop (no recursion: thousands of routes are fine).
+    let layer: Layer;
+    let match: PathMatchResult | null = null;
+    for (;;) {
+      if (idx >= stack.length) {
+        restore();
+        return out(layerError);
+      }
+      layer = stack[idx++];
 
-    // Restore url/baseUrl/app between sibling layers
-    req.baseUrl = parentBaseUrl;
-    req.url = parentUrl;
+      // Error-handler matching check
+      if (layerError !== undefined && !layer.isRouter && !layer.isErrorHandler) continue;
+      if (layerError === undefined && layer.isErrorHandler) continue;
+
+      // Method check for route layers
+      if (layer.method !== null) {
+        const methodOk =
+          layer.method === 'ALL' ||
+          layer.method === m ||
+          (m === 'HEAD' && layer.method === 'GET');
+        if (!methodOk) {
+          if (m === 'OPTIONS' && layerError === undefined) {
+            recordOptionsIfMatched(req, layer, currentPath);
+          }
+          continue;
+        }
+      }
+
+      // Path match
+      try {
+        match = layer.matcher.match(currentPath);
+      } catch (decodeErr) {
+        // Express: a param that fails to decode becomes the layer error (400).
+        if (layerError === undefined) layerError = decodeErr;
+        continue;
+      }
+      if (match) break;
+    }
+
     req.app = parentApp;
     res.app = parentApp;
 
-    // Error-handler matching check
-    if (layerError !== undefined && !layer.isRouter && !layer.isErrorHandler) {
-      return next(layerError);
-    }
-    if (layerError === undefined && layer.isErrorHandler) {
-      return next();
-    }
-
-    const currentPath = req.path || '/';
-
-    // Method check for route layers
-    if (layer.method !== null) {
-      const m = req.method;
-      const methodOk =
-        layer.method === 'ALL' ||
-        layer.method === m ||
-        (m === 'HEAD' && layer.method === 'GET');
-      if (!methodOk) {
-        if (m === 'OPTIONS' && layerError === undefined) {
-          recordOptionsIfMatched(req, layer, currentPath);
-        }
-        return next(layerError);
-      }
-    }
-
-    // Path match
-    let match: PathMatchResult | null;
-    try {
-      match = layer.matcher.match(currentPath);
-    } catch (decodeErr) {
-      // Express: a param that fails to decode becomes the layer error (400).
-      return next(layerError ?? decodeErr);
-    }
-    if (!match) {
-      return next(layerError);
-    }
-
     // Merge params according to router options using null-prototype map
     const mergedParams: Record<string, string> = router._options.mergeParams
-      ? Object.assign(Object.create(null), parentParams, match.params)
+      ? mergeParams(match.params, parentParams)
       : Object.assign(Object.create(null), match.params);
     req.params = mergedParams;
 
-    // Strip matched prefix for mounted middleware/sub-routers
-    if (layer.method === null && match.matchedPath.length > 0 && match.matchedPath !== '/') {
-      stripMountPrefix(req, match.matchedPath, parentBaseUrl, parentUrl);
-    }
-
     const runLayer = (paramErr?: unknown) => {
       if (paramErr !== undefined && paramErr !== null) {
-        return next(paramErr);
-      }
-      if (layer.isRouter) {
-        if (layer.subApp) {
-          req.app = layer.subApp;
-          res.app = layer.subApp;
+        next(layerError ?? paramErr);
+      } else if (layer.isRouter || layer.method === null) {
+        // Mounted middleware/sub-router: move the matched prefix from `req.url` to `req.baseUrl`.
+        const matched = match!.matchedPath;
+        if (matched.length > 0 && matched !== '/') {
+          removed = matched;
+          req.url = protohost + req.url.slice(protohost.length + removed.length);
+          if (protohost === '' && req.url.charCodeAt(0) !== 0x2f) {
+            req.url = '/' + req.url;
+            slashAdded = true;
+          }
+          req.baseUrl =
+            parentBaseUrl + (removed.endsWith('/') ? removed.slice(0, -1) : removed);
         }
-        (layer.handle as Router).handle(req, res, next, 0, layerError);
+        if (layer.isRouter) {
+          if (layer.subApp) {
+            req.app = layer.subApp;
+            res.app = layer.subApp;
+          }
+          (layer.handle as Router).handle(req, res, next, 0, layerError);
+        } else {
+          invokeHandler(layer.handle as AnyHandler, layerError, req, res, next);
+        }
       } else {
         if (layer.route && !layer.isRoute) {
           req.route = layer.route;
         }
         invokeHandler(layer.handle as AnyHandler, layerError, req, res, next);
       }
+      sync = 0;
     };
 
     // Run router.param() handlers for matched params (if any)
@@ -259,7 +337,7 @@ export function processParams(
   params: Map<string, ParamHandler[]>,
   keys: string[],
   values: Record<string, string>,
-  called: Map<string, string>,
+  called: Map<string, ParamCall>,
   req: RxRequest,
   res: RxResponse,
   done: NextFunction
@@ -267,19 +345,31 @@ export function processParams(
   let keyIdx = 0;
 
   const nextKey = (err?: unknown) => {
-    if (err !== undefined && err !== null) return done(err);
+    if (err !== undefined && err !== null && err !== false) return done(err);
 
     while (keyIdx < keys.length) {
       const name = keys[keyIdx++];
       const val = values[name];
       const callbacks = params.get(name);
-      if (!callbacks || callbacks.length === 0) continue;
-      if (called.get(name) === val) continue;
-      called.set(name, val);
+      if (val === undefined || !callbacks || callbacks.length === 0) continue;
+      // router@2: once per value per request; a later layer sees the value the callbacks left
+      // in req.params, and an error (other than 'route') sticks for every value.
+      const prev = called.get(name);
+      if (prev && (prev.match === val || (prev.error && prev.error !== 'route'))) {
+        req.params[name] = prev.value;
+        if (prev.error) return done(prev.error);
+        continue;
+      }
+      const call: ParamCall = { match: val, value: val, error: undefined };
+      called.set(name, call);
 
       let cbIdx = 0;
       const nextCb: NextFunction = (cbErr?: unknown) => {
-        if (cbErr !== undefined && cbErr !== null) return done(cbErr);
+        call.value = req.params[name];
+        if (cbErr !== undefined && cbErr !== null && cbErr !== false) {
+          call.error = cbErr;
+          return done(cbErr);
+        }
         if (cbIdx >= callbacks.length) return nextKey();
         const cb = callbacks[cbIdx++];
         let cbCalled = false;
@@ -293,11 +383,11 @@ export function processParams(
           const ret = cb(req, res, safeCbNext, val, name);
           if (ret && typeof (ret as PromiseLike<unknown>).then === 'function') {
             (ret as PromiseLike<unknown>).then(undefined, (rej: unknown) => {
-              if (!res.writableEnded) safeCbNext(normalizeThrownError(rej));
+              safeCbNext(rejectionError(rej));
             });
           }
         } catch (thrown) {
-          if (!res.writableEnded) safeCbNext(normalizeThrownError(thrown));
+          safeCbNext(thrown);
         }
       };
       nextCb();
@@ -307,4 +397,11 @@ export function processParams(
   };
 
   nextKey();
+}
+
+/** @internal Per-request record of a `router.param()` callback run (router@2 `paramCalled`). */
+export interface ParamCall {
+  match: string;
+  value: string;
+  error: unknown;
 }

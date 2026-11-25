@@ -14,7 +14,7 @@ import type { NativeServerInstance } from '../native.js';
 import { BODY_MODE_STREAMED, ResponseBatchWriter } from '../protocol.js';
 import { type BodySource, RxRequest } from '../request.js';
 import { RxResponse } from '../response.js';
-import { invokeHandler, normalizeThrownError, type Router } from '../router.js';
+import { invokeHandler, rejectionError, type Router } from '../router.js';
 import type { NextFunction } from '../types.js';
 import { createBodySource, deliverClosedStreams, deliverStreamEvents } from './body-streams.js';
 import type { CompiledFastRoute } from './fast-routes.js';
@@ -236,6 +236,7 @@ export class ServerRuntime {
           res
         );
         res._reset(req);
+        req._conditional = (flags & 0x08) !== 0;
         batchReqs.push(req);
         if ((flags & 0x04) !== 0) {
           this.upgrades.dispatch(req);
@@ -398,7 +399,7 @@ export class ServerRuntime {
           res,
           this.finalHandler(req, res),
           route.nextLayerIdx,
-          normalizeThrownError(thrown)
+          thrown
         );
       }
     }
@@ -420,7 +421,7 @@ export class ServerRuntime {
           res,
           this.finalHandler(req, res),
           capturedNextIdx,
-          normalizeThrownError(rej)
+          rejectionError(rej)
         );
       }
     });
@@ -451,13 +452,13 @@ export class ServerRuntime {
       if (ret && typeof (ret as PromiseLike<unknown>).then === 'function') {
         (ret as PromiseLike<unknown>).then(undefined, (rej: unknown) => {
           if (!res.writableEnded && !enteredRouter) {
-            directNext(normalizeThrownError(rej));
+            directNext(rejectionError(rej));
           }
         });
       }
     } catch (thrown) {
       if (!res.writableEnded && !enteredRouter) {
-        directNext(normalizeThrownError(thrown));
+        directNext(thrown);
       }
     }
   }
@@ -471,21 +472,13 @@ export class ServerRuntime {
     const step: NextFunction = (err?: unknown) => {
       if (err !== undefined && err !== null) {
         this.fastEnteredRouter = true;
-        if (err === 'route') {
-          return this.router.handle(
-            req,
-            res,
-            this.finalHandler(req, res),
-            route.nextLayerIdx,
-            undefined
-          );
-        }
+        // Resume right after the layer that called next(err) / next('route').
         return this.router.handle(
           req,
           res,
           this.finalHandler(req, res),
-          route.nextLayerIdx,
-          err
+          route.errorNextIdx[idx - 1] ?? route.nextLayerIdx,
+          err === 'route' ? undefined : err
         );
       }
       if (idx < chainLen) {

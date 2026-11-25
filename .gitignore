@@ -11,3 +11,4 @@ node_modules
 
 # soak test output
 bench/soak-results.csv
+compat/

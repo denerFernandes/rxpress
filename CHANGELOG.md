@@ -17,17 +17,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Native `express.static()`, `express.json()`, `express.urlencoded()`, `express.text()` and `express.raw()` implemented in Rust.
 - Prebuilt binaries per platform (`rxpress-<target>` as `optionalDependencies`): darwin arm64/x64, linux x64/arm64 (glibc and musl), win32 x64.
 - CI (GitHub Actions) and a release workflow with npm provenance.
+- `npm run test:express`: runs Express's own test suite against rxpress (also in CI); tests that still fail are listed in `test/express-suite/known-failures.json`.
+- Every method in `http.METHODS` on `app`, `Router` and `Route` (`app.acl()`, `router.propfind()`, `route['m-search']()`...), as in Express.
 - `npm run bench:soak`: long-running mixed-traffic soak test that tracks RSS, heap and open descriptors.
+- `express.Router()` returns a callable router (`router(req, res, next)`), as in Express; `router.handle()` works with plain request objects (FQDN URLs, blank or missing URL, lowercase methods).
 
 ### Changed
 
 - `engines.node` is now `>=22` (Node 20 is end-of-life).
 - `req.query` with the `extended` parser and `urlencoded` bodies now match qs as used by Express 5: ordinary objects, only `__proto__` segments are skipped (keys such as `constructor` are kept). The `simple` parser keeps every key on a prototype-free object, like `node:querystring`.
+- `res.send`/`res.json`/`res.jsonp`/`res.sendStatus` follow Express exactly: an ETag for any status and method, 304 when the request is fresh against an ETag or `Last-Modified` set by the app, Content-Type/Content-Length stripped on 204 and 304, an empty body with `Content-Length: 0` on 205, custom `etag` functions. `res.end()` no longer adds an ETag.
+- `res.set('Content-Type', ...)` adds the default charset like Express (`mime-types`), and `res.send(string)`/`res.json()` set `charset=utf-8` on an existing Content-Type.
+- `app.use()`, `router.use()`, `route.VERB()` and `router.param()` reject missing or non-function handlers with the same errors as Express.
 - JSON bodies are parsed with plain `JSON.parse`, like body-parser: a `__proto__` key is kept as an own property (it never reaches `Object.prototype`).
+- A 304 produced by `res.send` is visible as `res.statusCode` (loggers, `'finish'` listeners), as in Express.
+- The router follows router@2: a middleware may rewrite `req.url` for the layers after it, it yields to the event loop every 100 synchronous `next()` calls (no stack overflow with thousands of layers), `router.param()` runs once per value and keeps the value or error it left, regexp paths name their captures like Express, and `mergeParams` shifts numeric captures after the parent's.
+- A handler that throws `null`/`undefined` continues to the next layer, and a promise rejected with no value becomes `Error('Rejected promise')`, as in Express.
+- Body parsers: a whitespace-only JSON body is a 400, a body whose size does not match `Content-Length` is a 400, a custom `type` function is not called for requests without a body, `verify` must be a function, `parameterLimit: Infinity` is accepted, `charset=utf-16` honours the byte-order mark, and a `verify` error carries the raw body.
+- Content-Type lookup by extension (static files, `res.sendFile`, `res.download`, `res.type`, `res.format`, `res.attachment`) uses the mime-db table that Express uses (e.g. `.js` is `text/javascript`), generated into the engine by `scripts/gen-mime-table.mjs`; the `mime_guess` crate is gone. `res.type()` with an unknown extension gives `application/octet-stream`, as in Express.
+- `res.format()` follows Express 5: handlers receive `(req, res, next)`, no match calls `next()` with a 406 error that lists the supported `types`, and the Content-Type drops the key's parameters.
+- `Content-Disposition` follows `content-disposition` 2: `filename` is unquoted when it is a token; a `Content-Disposition` in `res.download()`'s `headers` option is ignored; `res.attachment('')` sends `filename=""`.
+- `res.sendFile()` with `root` normalizes the path first (`a/../b` is allowed when it stays inside the root), and a non-string path throws `path must be a string to res.sendFile`.
+- `res.get()` returns arrays as set (it is `res.getHeader()` in Express); `res.vary()` follows the `vary` package (arrays, `*`, invalid names throw).
 - The main package no longer ships `native/`; the binary comes from the platform package (a local `native/rxpress.node` still takes precedence during development).
 
 ### Fixed
 
+- An error from app-level middleware now reaches the error handlers registered between it and the matched route (it skipped them on compiled routes).
 - Windows: the listener no longer sets `SO_REUSEADDR`, which there allowed a second process to bind the same port; `EADDRINUSE` is reported as in Node.
 - README no longer claims object pooling for `RxRequest`/`RxResponse` (a new pair is created per request).
 

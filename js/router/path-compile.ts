@@ -366,23 +366,31 @@ export function compilePathMatcher(
   const end = options.end;
 
   if (path instanceof RegExp) {
+    // router@2: a named group takes its name, unnamed groups are numbered 0, 1, ... among
+    // themselves.
+    const names: string[] = [];
+    const groupRe = /\((?:\?<(.*?)>)?(?!\?)/g;
+    let unnamed = 0;
+    for (let g = groupRe.exec(path.source); g !== null; g = groupRe.exec(path.source)) {
+      names.push(g[1] || String(unnamed++));
+    }
     return {
       raw: path,
       isPrefix: !end,
       match(input: string): PathMatchResult | null {
         const m = path.exec(input);
         if (!m) return null;
+        if (!end) {
+          // A mount path must match a prefix of the path, ending at a segment boundary.
+          if (m.index !== 0) return null;
+          const c = input.charCodeAt(m[0].length);
+          if (m[0].length !== 0 && c === c && c !== 0x2f) return null;
+        }
         const params: Record<string, string> = Object.create(null);
         for (let i = 1; i < m.length; i++) {
-          if (m[i] !== undefined) {
-            params[String(i - 1)] = safeDecode(m[i]);
-          }
-        }
-        if (m.groups) {
-          for (const [k, v] of Object.entries(m.groups)) {
-            if (v !== undefined && !isUnsafeKey(k)) {
-              params[k] = safeDecode(v);
-            }
+          const name = names[i - 1] ?? String(i - 1);
+          if (m[i] !== undefined && !isUnsafeKey(name)) {
+            params[name] = safeDecode(m[i]);
           }
         }
         return { matched: true, matchedPath: m[0], params };

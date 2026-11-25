@@ -104,6 +104,8 @@ export interface NativeServerInstance {
 
 export interface NativeAddon {
   NativeServer: new (cfg?: NativeServerConfig) => NativeServerInstance;
+  /** `mime-types.contentType(ext)` from the engine's table (mime-db), or null. */
+  mimeContentType(ext: string): string | null;
 }
 
 let cachedAddon: NativeAddon | null = null;

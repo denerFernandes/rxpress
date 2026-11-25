@@ -115,9 +115,15 @@ fn bind_reusable_listener(addr: SocketAddr) -> Result<std::net::TcpListener, Str
     socket
         .set_nonblocking(true)
         .map_err(|e| format!("Failed to set nonblocking: {e}"))?;
-    socket
-        .bind(&addr.into())
-        .map_err(|e| format!("Failed to bind to {addr}: {e}"))?;
+    socket.bind(&addr.into()).map_err(|e| {
+        // Same wording on every OS (Windows says "Only one usage of each socket address..."),
+        // so the JS side can report EADDRINUSE like Node.
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            format!("EADDRINUSE: address already in use {addr}")
+        } else {
+            format!("Failed to bind to {addr}: {e}")
+        }
+    })?;
     socket
         .listen(4096)
         .map_err(|e| format!("Failed to listen on {addr}: {e}"))?;

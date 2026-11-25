@@ -369,7 +369,8 @@ describe('Dispatch, Sub-Apps, Patterns & Lifecycle', () => {
     expect(allowMethods).toContain('POST');
 
     expect((await fetch(`${base}/rej-undef`)).status).toBe(500);
-    expect((await fetch(`${base}/throw-null`)).status).toBe(500);
+    // Express 5 passes a thrown null on as next(null): no error, the request falls through.
+    expect((await fetch(`${base}/throw-null`)).status).toBe(404);
 
     const bigBody = JSON.stringify({ data: 'x'.repeat(1200 * 1024) });
     const subRes = await fetch(`${base}/sub/big/one/two`, {

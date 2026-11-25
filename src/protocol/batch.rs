@@ -22,6 +22,10 @@ pub const RESP_FLAG_IS_FILE: u8 = 0x02;
 pub const RESP_FLAG_SUPPRESS_POWERED_BY: u8 = 0x04;
 pub const RESP_FLAG_SUPPRESS_ETAG: u8 = 0x08;
 pub const RESP_FLAG_FILE_META: u8 = 0x10;
+/// Body sent by `res.send`/`res.json`/`res.jsonp`/`res.sendStatus`: apply Express's `res.send`
+/// rules (ETag for any status, 304 when fresh, 204/205/304 body stripping). Without it the
+/// response is a plain `res.end`, which Express never tags.
+pub const RESP_FLAG_SEND: u8 = 0x20;
 
 #[inline]
 fn read_u16(buf: &[u8], pos: &mut usize) -> Option<u16> {
@@ -376,8 +380,13 @@ pub fn dispatch_response_batch(
 
         let is_file = (f.flags & RESP_FLAG_IS_FILE) != 0;
         let suppress_etag = (f.flags & RESP_FLAG_SUPPRESS_ETAG) != 0;
-        let needs_etag = etag_enabled && !suppress_etag && status == 200 && blen > 0;
-        if !is_file && !needs_etag && !(js_cl_mismatch && blen == 0) {
+        // `res.send` responses need the general path for the ETag, the freshness check (which
+        // may use an ETag / Last-Modified set from JS) and 204/205/304 stripping.
+        let send_rules = (f.flags & RESP_FLAG_SEND) != 0
+            && ((etag_enabled && !suppress_etag)
+                || (f.flags & RESP_FLAG_HAS_HEADERS) != 0
+                || matches!(status, 204 | 205 | 304));
+        if !is_file && !send_rules && !(js_cl_mismatch && blen == 0) {
             let raw = build_wire_response(
                 &f,
                 &mut num_buf,

@@ -413,6 +413,7 @@ mod tests {
             raw_headers: Bytes::new(),
             body: Bytes::from(vec![b'a'; 1024]),
             upgrade: false,
+            conditional: false,
         });
         shared.scheduled.store(true, Ordering::SeqCst);
 

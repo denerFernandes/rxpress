@@ -57,6 +57,23 @@ jobs:
       - run: npm test
       - run: npm run test:e2e
 
+  express-suite:
+    name: Express test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
+      # Fails on any Express test outside test/express-suite/known-failures.json.
+      - run: npm run test:express -- --json express-suite.json
+      - run: cat express-suite.json | head -6
+
   audit:
     name: Audit
     runs-on: ubuntu-latest

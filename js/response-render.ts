@@ -2,24 +2,45 @@
  * `res.format()` (content negotiation) and `res.render()` (view rendering). Plain functions over
  * the response; `RxResponse` keeps thin methods that delegate here.
  */
+import { extname } from 'node:path';
 import type { Application } from './application.js';
+import { loadNativeAddon } from './native.js';
+import type { RxRequest } from './request.js';
 import type { RxResponse } from './response.js';
 
-/** @internal */
-export function formatResponse(res: RxResponse, obj: Record<string, () => unknown>): void {
-  const defaultFn = obj.default;
+/** Express `normalizeType`: a full type keeps its first part, an extension is looked up. */
+function formatType(key: string): string {
+  if (key.indexOf('/') !== -1) return key.split(/ *; */)[0];
+  const ext = extname('x.' + key).toLowerCase().slice(1);
+  const ct = ext ? loadNativeAddon().mimeContentType(ext) : null;
+  return ct ? ct.split(';')[0] : 'application/octet-stream';
+}
+
+/** @internal `res.format()`, step for step as in Express 5. */
+export function formatResponse(
+  res: RxResponse,
+  obj: Record<string, (req: RxRequest, res: RxResponse, next: (err?: unknown) => void) => unknown>
+): void {
+  const req = res.req;
+  const next = req.next;
   const keys = Object.keys(obj).filter((k) => k !== 'default');
-  const matched = keys.length > 0 ? res.req.accepts(keys) : false;
+  const key = keys.length > 0 ? req.accepts(keys) : false;
   res.vary('Accept');
 
-  if (typeof matched === 'string') {
-    res.type(matched);
-    obj[matched]();
-  } else if (defaultFn) {
-    defaultFn();
+  if (key) {
+    res.set('Content-Type', formatType(key as string));
+    obj[key as string](req, res, next as (err?: unknown) => void);
+  } else if (obj.default) {
+    obj.default(req, res, next as (err?: unknown) => void);
   } else {
-    const err = Object.assign(new Error('Not Acceptable'), { status: 406, statusCode: 406 });
-    throw err;
+    const err = Object.assign(new Error('Not Acceptable'), {
+      status: 406,
+      statusCode: 406,
+      expose: true,
+      types: keys.map(formatType),
+    });
+    if (typeof next === 'function') next(err);
+    else throw err;
   }
 }
 

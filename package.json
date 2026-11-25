@@ -32,6 +32,7 @@
     "bench": "node bench/run.mjs",
     "bench:soak": "node bench/soak.mjs",
     "test:e2e": "vitest run -c vitest.e2e.config.ts",
+    "test:express": "node scripts/run-express-suite.mjs",
     "lint": "cargo fmt --check && cargo clippy --release -- -D warnings && tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "version-sync": "node scripts/version-sync.mjs"

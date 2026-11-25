@@ -122,7 +122,7 @@ pub fn if_range_matches(if_range: &str, etag: Option<&str>, last_modified: Optio
 }
 
 #[inline]
-pub(super) fn http_date_not_modified(if_modified_since: &str, last_modified: &str) -> bool {
+pub fn http_date_not_modified(if_modified_since: &str, last_modified: &str) -> bool {
     let ims = if_modified_since.trim();
     if ims == last_modified {
         return true;
