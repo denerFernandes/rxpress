@@ -84,7 +84,7 @@
     "passport-local": "^1.0.0",
     "socket.io": "^4.8.4",
     "socket.io-client": "^4.8.4",
-    "tsup": "^8.4.0",
+    "tsup": "^9.0.0",
     "typescript": "^5.8.2",
     "vitest": "^5.1.2"
   },

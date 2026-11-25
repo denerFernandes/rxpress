@@ -12,9 +12,6 @@ updates:
       # that do not exist there.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
-      # tsup 9 changes the shape of dist/index.d.cts, which scripts/fix-cjs-dts.mjs rewrites.
-      - dependency-name: "tsup"
-        update-types: ["version-update:semver-major"]
       # TypeScript 7 is the native compiler; adopt it deliberately, not through a bot.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]

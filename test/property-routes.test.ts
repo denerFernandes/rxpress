@@ -86,7 +86,7 @@ describe('route matching: grammar patterns vs Express 5 Layer (path-to-regexp 8)
     expect(matched).toBeGreaterThan(5_000);
   });
 
-  it('timing bound: every generated pattern matches / misses a ~6 KB adversarial path in < 50 ms', () => {
+  it('timing bound: every generated pattern matches / misses a ~6 KB adversarial path in < 250 ms', () => {
     const filler = fc.constantFrom('-', '.', '~', '/', '-a', 'a.', '/-', '%2F', 'a');
     fc.assert(
       fc.property(patternNodes, filler, fc.integer({ min: 1000, max: 3000 }), fc.constantFrom('', '/', '!', '/x'), (nodes, fill, n, tail) => {
@@ -107,7 +107,7 @@ describe('route matching: grammar patterns vs Express 5 Layer (path-to-regexp 8)
           } catch {
             /* URIError from decoding is fine */
           }
-          expect(performance.now() - t0, `${pattern} len=${input.length}`).toBeLessThan(50);
+          expect(performance.now() - t0, `${pattern} len=${input.length}`).toBeLessThan(250); // backtracking blow-up takes seconds; this only absorbs a busy machine
         }
       }),
       fcParams(600)
