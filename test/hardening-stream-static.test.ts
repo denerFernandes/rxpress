@@ -105,12 +105,17 @@ describe('Streaming/SSE Spin-Loop, Backpressure & Framing', () => {
       expect(rBad.status).toBeGreaterThanOrEqual(400);
     }
 
-    const cpuBefore = process.cpuUsage();
-    await new Promise<void>((r) => setTimeout(r, 150));
-    const cpuDelta = process.cpuUsage(cpuBefore);
-    const totalCpuMs = (cpuDelta.user + cpuDelta.system) / 1000;
-    // A spin-loop burns the whole 150 ms window; the margin absorbs noisy shared CI runners.
-    expect(totalCpuMs).toBeLessThan(120);
+    // A spin-loop burns the CPU in every window, so one quiet 150 ms window out of three proves
+    // there is none; a shared CI runner can make a single window noisy (125 ms was seen).
+    const windows: number[] = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const cpuBefore = process.cpuUsage();
+      await new Promise<void>((r) => setTimeout(r, 150));
+      const cpuDelta = process.cpuUsage(cpuBefore);
+      windows.push((cpuDelta.user + cpuDelta.system) / 1000);
+      if (windows[attempt] < 80) break;
+    }
+    expect(Math.min(...windows), `CPU ms per 150 ms window: ${windows.join(', ')}`).toBeLessThan(80);
 
     const rHealth = await fetch(`${base}/health`);
     expect(rHealth.status).toBe(200);
