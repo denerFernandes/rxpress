@@ -23,7 +23,7 @@ napi-derive = "2.16"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "fs", "time", "macros"] }
 httparse = "1"
 bytes = "1"
-matchit = "0.8"
+matchit = "0.9"
 crossbeam-queue = "0.3"
 parking_lot = "0.12"
 rustc-hash = "2"
