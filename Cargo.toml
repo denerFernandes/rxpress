@@ -18,7 +18,7 @@ fuzzing = []
 
 [dependencies]
 libc = "0.2"
-napi = { version = "2.16", default-features = false, features = ["napi8", "tokio_rt"] }
+napi = { version = "3.16", default-features = false, features = ["napi8", "tokio_rt"] }
 napi-derive = "2.16"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "fs", "time", "macros"] }
 httparse = "1"
