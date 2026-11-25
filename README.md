@@ -8,7 +8,7 @@ HTTP/HTTPS server for Node.js with the networking engine written in Rust (N-API)
 npm install rxpress
 ```
 
-The native binary ships in per-platform packages (`rxpress-<target>`) installed automatically as `optionalDependencies`; npm only downloads the one for your machine. Do not use `--omit=optional`/`--no-optional`. Requires Node.js >= 20.
+The native binary ships in per-platform packages (`rxpress-<target>`) installed automatically as `optionalDependencies`; npm only downloads the one for your machine. Do not use `--omit=optional`/`--no-optional`. Requires Node.js >= 22.
 
 | Target | Package |
 | --- | --- |
@@ -25,6 +25,8 @@ If no binary loads, the error names the expected package. In a clone of the repo
 **Windows:** the `'upgrade'` event (WebSocket) is not supported yet, because handing the socket over to JS is Unix-only. Everything else behaves the same. Until that lands, the Windows test job in CI is informational (`continue-on-error`).
 
 ## Benchmarks (Apple M1 Pro, Node.js v24, same 45-route API)
+
+> **These numbers are a reference, not a promise.** They measure the server itself on minimal handlers. In a real application, throughput and latency are dominated by everything around the server: your dependencies and middleware, business logic, database and cache access, calls to other services, payload sizes and the hardware you deploy on. Expect the gain to be much smaller once that work is included, and measure with your own application before drawing conclusions.
 
 Measured on a single machine and not reproduced on other hardware; absolute numbers depend on the CPU. Command used (requires `wrk`):
 

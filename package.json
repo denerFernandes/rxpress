@@ -30,6 +30,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "bench": "node bench/run.mjs",
+    "bench:soak": "node bench/soak.mjs",
     "test:e2e": "vitest run -c vitest.e2e.config.ts",
     "lint": "cargo fmt --check && cargo clippy --release -- -D warnings && tsc --noEmit",
     "typecheck": "tsc --noEmit",
@@ -53,7 +54,7 @@
     "vitest": "^3.0.8"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "optionalDependencies": {
     "rxpress-darwin-arm64": "0.1.0",

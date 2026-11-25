@@ -1,10 +1,10 @@
 // Port of the `qs@6.17` parse algorithm (the one Express 5 and body-parser use for "extended"
 // query strings / urlencoded bodies), restricted to the option set those callers pass:
-//   allowDots=false, allowEmptyArrays=false, comma=false, duplicates='combine', parseArrays=true,
-//   plainObjects=true (null-prototype containers), strictMerge=true, strictNullHandling=false,
-//   throwOnLimitExceeded=false, utf-8 only.
-// Differences on purpose: containers have a null prototype, and any key whose segment is
-// `__proto__`, `constructor` or `prototype` is dropped entirely (rxpress never exposes them).
+//   allowDots=false, allowEmptyArrays=false, allowPrototypes=true, comma=false,
+//   duplicates='combine', parseArrays=true, plainObjects=false, strictMerge=true,
+//   strictNullHandling=false, throwOnLimitExceeded=false, utf-8 only.
+// As in qs, containers are ordinary objects and a `__proto__` segment is never assigned (its
+// parent container is still created), so the result cannot reach Object.prototype.
 //
 // Kept dependency-free so rxpress keeps zero runtime dependencies.
 
@@ -24,12 +24,8 @@ export interface QsOptions {
 const hasOwn = (o: object, k: PropertyKey): boolean => Object.prototype.hasOwnProperty.call(o, k);
 const isArray = Array.isArray;
 
-function isUnsafe(key: string): boolean {
-  return key === '__proto__' || key === 'constructor' || key === 'prototype';
-}
-
-function nullObj(): Obj {
-  return Object.create(null) as Obj;
+function newObj(): Obj {
+  return {};
 }
 
 function decode(s: string): string {
@@ -59,7 +55,7 @@ class State {
   }
 
   arrayToObject(src: unknown[]): Obj {
-    const o = nullObj();
+    const o = newObj();
     for (let i = 0; i < src.length; ++i) {
       if (src[i] !== undefined) o[i] = src[i];
     }
@@ -125,7 +121,7 @@ class State {
     if (target === null || target === undefined || typeof target !== 'object') {
       if (this.overflow.has(src)) {
         const keys = Object.keys(src);
-        const result = nullObj();
+        const result = newObj();
         result[0] = target;
         for (let m = 0; m < keys.length; m++) {
           result[parseInt(keys[m], 10) + 1] = src[keys[m]];
@@ -214,19 +210,14 @@ function stripWrappingBrackets(key: string): string {
   return key.charAt(0) === '[' && key.charAt(key.length - 1) === ']' ? key.slice(1, -1) : key;
 }
 
-/** qs `splitKeyIntoSegments`; `undefined` drops the key (unsafe segment). */
-function splitKey(key: string, opts: QsOptions): string[] | undefined {
-  if (opts.depth <= 0) {
-    return isUnsafe(stripWrappingBrackets(key)) ? undefined : [key];
-  }
+/** qs `splitKeyIntoSegments` (allowPrototypes=true: no segment is rejected here). */
+function splitKey(key: string, opts: QsOptions): string[] {
+  if (opts.depth <= 0) return [key];
 
   const segments: string[] = [];
   const first = key.indexOf('[');
   const parent = first >= 0 ? key.slice(0, first) : key;
-  if (parent) {
-    if (isUnsafe(parent)) return undefined;
-    segments.push(parent);
-  }
+  if (parent) segments.push(parent);
 
   const n = key.length;
   let open = first;
@@ -248,9 +239,7 @@ function splitKey(key: string, opts: QsOptions): string[] | undefined {
       segments.push('[' + key.slice(open) + ']');
       return segments;
     }
-    const seg = key.slice(open, close + 1);
-    if (isUnsafe(seg.slice(1, -1))) return undefined;
-    segments.push(seg);
+    segments.push(key.slice(open, close + 1));
     collected += 1;
     open = key.indexOf('[', close + 1);
   }
@@ -276,7 +265,7 @@ function parseObject(chain: string[], val: unknown, st: State): unknown {
         ? leaf
         : st.combine([], leaf);
     } else {
-      const o = nullObj();
+      const o = newObj();
       obj = o;
       const cleanRoot = stripWrappingBrackets(root);
       const index = parseInt(cleanRoot, 10);
@@ -289,7 +278,7 @@ function parseObject(chain: string[], val: unknown, st: State): unknown {
       } else if (isValidArrayIndex) {
         o[index] = leaf;
         st.markOverflow(o, index);
-      } else if (!isUnsafe(cleanRoot)) {
+      } else if (cleanRoot !== '__proto__') {
         o[cleanRoot] = leaf;
       }
     }
@@ -328,15 +317,15 @@ function compact(value: Obj): Obj {
 }
 
 /**
- * `qs.parse(str, { plainObjects: true, ...opts })` for the Express/body-parser option set.
+ * `qs.parse(str, { allowPrototypes: true, ...opts })` for the Express/body-parser option set.
  * Throws RangeError only when `strictDepth` is set and exceeded.
  */
 export function qsParse(str: string, opts: QsOptions): Obj {
-  if (str === '') return nullObj();
+  if (str === '') return newObj();
   const st = new State(opts.arrayLimit);
 
-  // parseValues
-  const temp = nullObj();
+  // parseValues (qs keeps this intermediate map prototype-free)
+  const temp = Object.create(null) as Obj;
   const clean = str.replace(/%5B/gi, '[').replace(/%5D/gi, ']');
   const parts = clean.split('&', opts.parameterLimit === Infinity ? undefined : opts.parameterLimit);
   for (let i = 0; i < parts.length; ++i) {
@@ -359,13 +348,12 @@ export function qsParse(str: string, opts: QsOptions): Obj {
     }
   }
 
-  let obj: unknown = nullObj();
+  let obj: unknown = newObj();
   const keys = Object.keys(temp);
   for (let i = 0; i < keys.length; ++i) {
     const key = keys[i];
     if (!key) continue;
     const chain = splitKey(key, opts);
-    if (!chain) continue;
     obj = st.merge(obj, parseObject(chain, temp[key], st));
   }
   return compact(obj as Obj);

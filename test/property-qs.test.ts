@@ -19,13 +19,13 @@ import { qsParse } from '../js/qs.js';
 import { countFormParameters, parseQueryString, parseUrlencodedBody } from '../js/security.js';
 import {
   fcParams,
-  hasUnsafeOwnKey,
+  hasProtoKeyOnOrdinaryObject,
   plain,
+  protoShape,
   prototypeSnapshot,
   QS_TOKENS,
   QS_TOKENS_HOSTILE,
   tokenString,
-  UNSAFE_KEYS,
 } from './helpers/property.js';
 
 const require = createRequire(import.meta.url);
@@ -36,11 +36,7 @@ const rxQuery = (s: string, mode: 'extended' | 'simple') =>
   parseQueryString(s, { mode, parameterLimit: 1000, maxDepth: 5 });
 
 const expressExtended = (s: string) => qs.parse(s, { allowPrototypes: true });
-const expressSimple = (s: string) => {
-  const out = querystring.parse(s) as Record<string, unknown>;
-  for (const k of UNSAFE_KEYS) delete out[k];
-  return out;
-};
+const expressSimple = (s: string) => querystring.parse(s) as Record<string, unknown>;
 
 function rxBody(s: string, extended: boolean): unknown {
   const n = countFormParameters(s, 1000);
@@ -69,7 +65,10 @@ describe('query parser "extended" vs qs (Express 5 options)', () => {
   it('deep-equals qs.parse(str, { allowPrototypes: true })', () => {
     fc.assert(
       fc.property(benign, (s) => {
-        expect(plain(rxQuery(s, 'extended'))).toEqual(plain(expressExtended(s)));
+        const ours = rxQuery(s, 'extended');
+        const ref = expressExtended(s);
+        expect(plain(ours)).toEqual(plain(ref));
+        expect(protoShape(ours)).toEqual(protoShape(ref));
       }),
       fcParams(4000)
     );
@@ -110,7 +109,10 @@ describe('query parser "simple" vs node:querystring', () => {
   it('deep-equals querystring.parse (malformed escapes included)', () => {
     fc.assert(
       fc.property(benign, (s) => {
-        expect(plain(rxQuery(s, 'simple'))).toEqual(plain(expressSimple(s)));
+        const ours = rxQuery(s, 'simple');
+        const ref = expressSimple(s);
+        expect(plain(ours)).toEqual(plain(ref));
+        expect(protoShape(ours)).toEqual(protoShape(ref));
       }),
       fcParams(4000)
     );
@@ -131,7 +133,10 @@ describe('urlencoded body vs body-parser 2 (qs)', () => {
   it('extended: deep-equals body-parser', () => {
     fc.assert(
       fc.property(benign, (s) => {
-        expect(plain(rxBody(s, true))).toEqual(plain(bodyParserBody(s, true)));
+        const ours = rxBody(s, true);
+        const ref = bodyParserBody(s, true);
+        expect(plain(ours)).toEqual(plain(ref));
+        expect(protoShape(ours)).toEqual(protoShape(ref));
       }),
       fcParams(3000)
     );
@@ -185,11 +190,11 @@ describe('parser invariants under hostile input', () => {
   ];
 
   for (const [name, parse] of parsers) {
-    it(`${name}: never throws, never pollutes prototypes, never exposes unsafe keys`, () => {
+    it(`${name}: never throws and never pollutes prototypes`, () => {
       fc.assert(
         fc.property(hostile, (s) => {
           const out = parse(s);
-          expect(hasUnsafeOwnKey(out)).toBe(false);
+          expect(hasProtoKeyOnOrdinaryObject(out)).toBe(false);
           expect(({} as Record<string, unknown>).polluted).toBeUndefined();
           expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'x')).toBe(false);
         }),
@@ -212,7 +217,7 @@ describe('parser invariants under hostile input', () => {
     for (const [, parse] of parsers) {
       for (const p of payloads) {
         const out = parse(p);
-        expect(hasUnsafeOwnKey(out)).toBe(false);
+        expect(hasProtoKeyOnOrdinaryObject(out)).toBe(false);
         expect(({} as Record<string, unknown>).polluted).toBeUndefined();
         expect(([] as unknown as Record<string, unknown>).polluted).toBeUndefined();
       }

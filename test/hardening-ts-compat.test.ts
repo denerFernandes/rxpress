@@ -80,7 +80,7 @@ afterEach(async () => {
   activeServers = [];
 });
 
-describe('M3 Hardening — Feature #8: Cross-Request Pooling Isolation', () => {
+describe('Cross-Request Pooling Isolation', () => {
   it('isolates custom properties, Symbols, prototypes, and wrapped res.end/writeHead across pooled keep-alive requests', async () => {
     const sym = Symbol('custom');
     let wrappedCalls = 0;
@@ -150,10 +150,10 @@ describe('M3 Hardening — Feature #8: Cross-Request Pooling Isolation', () => {
   });
 });
 
-describe('M3 Hardening — Feature #9: Security, Query, Prototype & Trust Proxy', () => {
-  it('enforces null-prototype maps, query parser modes, parameterLimit, maxDepth, and safeJsonParse', async () => {
+describe('security: query, prototype and trust proxy', () => {
+  it('query parser modes, prototype handling, parameterLimit, maxDepth and JSON parsing match Express 5', async () => {
     const parsedExt = parseQueryString('user[name]=alice&__proto__[p]=1&constructor[prototype][p]=1&a=1&a=2');
-    expect(Object.getPrototypeOf(parsedExt)).toBeNull();
+    expect(Object.getPrototypeOf(parsedExt)).toBe(Object.prototype);
     expect(Object.prototype.hasOwnProperty.call(parsedExt, '__proto__')).toBe(false);
     expect(({} as Record<string, unknown>).p).toBeUndefined();
     expect(parsedExt.a).toEqual(['1', '2']);
@@ -161,13 +161,14 @@ describe('M3 Hardening — Feature #9: Security, Query, Prototype & Trust Proxy'
     const parsedSimple = parseQueryString('user[name]=alice&tags[]=a&tags[]=b', { mode: 'simple' });
     expect(parsedSimple['user[name]']).toBe('alice');
     expect(parsedSimple['tags[]']).toEqual(['a', 'b']);
+    expect(Object.getPrototypeOf(parsedSimple)).toBeNull();
 
     const deep = parseQueryString(`a${'[b]'.repeat(20)}=1`, { maxDepth: 5 });
-    expect(Object.getPrototypeOf(deep)).toBeNull();
+    expect(Object.getPrototypeOf(deep)).toBe(Object.prototype);
     expect(countFormParameters('a=1&b=2&c=3&d=4', 3)).toBeUndefined();
 
     const safeJson = safeJsonParse('{"__proto__":{"polluted":1},"ok":true}') as Record<string, unknown>;
-    expect(Object.prototype.hasOwnProperty.call(safeJson, '__proto__')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(safeJson, '__proto__')).toBe(true);
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(safeJson.ok).toBe(true);
 
@@ -271,7 +272,7 @@ describe('M3 Hardening — Feature #9: Security, Query, Prototype & Trust Proxy'
   });
 });
 
-describe('M3 Hardening — Feature #10: Dispatch, Sub-Apps, Patterns & Lifecycle', () => {
+describe('Dispatch, Sub-Apps, Patterns & Lifecycle', () => {
   it('supports async directFn next() after await, error normalization, precedence, req.route, OPTIONS Allow, sub-apps, and Express 5 patterns', async () => {
     const app = rxpress();
     app.set('title', 'Root');
@@ -427,7 +428,7 @@ describe('M3 Hardening — Feature #10: Dispatch, Sub-Apps, Patterns & Lifecycle
   });
 });
 
-describe('M3 Hardening — Feature #11: Express 4/5 req/res & 3rd-Party Compat', () => {
+describe('Express 4/5 req/res & 3rd-Party Compat', () => {
   it('supports req.range, req.is(*+json), signedCookies, accepts specificity, fresh/no-cache, headersSent, status validation, and morgan content-length', async () => {
     const logs: string[] = [];
     const SECRET = 'm3-cookie-secret';
@@ -554,7 +555,7 @@ describe('M3 Hardening — Feature #11: Express 4/5 req/res & 3rd-Party Compat',
   });
 });
 
-describe('M3 Hardening — Feature #12: Strict TypeScript Types & Dual Packaging', () => {
+describe('Strict TypeScript Types & Dual Packaging', () => {
   it('provides callable CJS module.exports with named exports and clean .d.ts / .d.cts without leaked internal symbols', () => {
     const req = createRequire(import.meta.url);
     const cjs = req(join(process.cwd(), 'dist', 'index.cjs'));

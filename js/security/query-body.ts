@@ -80,13 +80,15 @@ export function parseQueryString(
   qs: string,
   options?: ParseQueryOptions
 ): Record<string, unknown> {
-  const result: Record<string, unknown> = Object.create(null);
   const mode = options?.mode ?? 'extended';
+  const extended = mode === 'extended';
+  // Express 5: qs ('extended') returns an ordinary object; querystring ('simple') and a disabled
+  // parser return a prototype-free one.
+  const result: Record<string, unknown> = extended ? {} : Object.create(null);
   if (!qs || mode === false) return result;
 
   const parameterLimit = options?.parameterLimit ?? 1000;
   const maxDepth = options?.maxDepth ?? 5;
-  const extended = mode === 'extended';
   const arrayLimit = options?.arrayLimit ?? 20;
   const qsOpts = { depth: maxDepth, arrayLimit, parameterLimit, strictDepth: options?.strictDepth };
   // Bracket syntax needs the full qs algorithm (arrays, merging, overflow); flat queries keep the
@@ -120,7 +122,8 @@ export function parseQueryString(
       }
 
       const key = decode(rawKey);
-      if (isUnsafeKey(key) || (extended && key === '')) {
+      // qs never assigns `__proto__` and drops empty keys; querystring keeps every key as data.
+      if (extended && (key === '' || key === '__proto__')) {
         start = amp + 1;
         continue;
       }
@@ -202,16 +205,10 @@ export function safeJsonParse(
     }
   }
 
-  const userReviver = options?.reviver;
+  // Plain JSON.parse, as body-parser does: a `__proto__` key becomes an own data property and
+  // never touches Object.prototype.
   try {
-    if (!userReviver && str.indexOf('__proto__') === -1 && str.indexOf('\\u') === -1) {
-      return JSON.parse(str);
-    }
-    const reviver = (key: string, value: unknown): unknown => {
-      if (key === '__proto__') return undefined;
-      return userReviver ? userReviver(key, value) : value;
-    };
-    return JSON.parse(str, reviver);
+    return JSON.parse(str, options?.reviver);
   } catch (err) {
     throw jsonSyntaxError(err, str);
   }

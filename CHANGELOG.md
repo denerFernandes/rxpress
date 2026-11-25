@@ -17,14 +17,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Native `express.static()`, `express.json()`, `express.urlencoded()`, `express.text()` and `express.raw()` implemented in Rust.
 - Prebuilt binaries per platform (`rxpress-<target>` as `optionalDependencies`): darwin arm64/x64, linux x64/arm64 (glibc and musl), win32 x64.
 - CI (GitHub Actions) and a release workflow with npm provenance.
+- `npm run bench:soak`: long-running mixed-traffic soak test that tracks RSS, heap and open descriptors.
 
 ### Changed
 
-- `engines.node` is now `>=20`.
+- `engines.node` is now `>=22` (Node 20 is end-of-life).
+- `req.query` with the `extended` parser and `urlencoded` bodies now match qs as used by Express 5: ordinary objects, only `__proto__` segments are skipped (keys such as `constructor` are kept). The `simple` parser keeps every key on a prototype-free object, like `node:querystring`.
+- JSON bodies are parsed with plain `JSON.parse`, like body-parser: a `__proto__` key is kept as an own property (it never reaches `Object.prototype`).
 - The main package no longer ships `native/`; the binary comes from the platform package (a local `native/rxpress.node` still takes precedence during development).
 
 ### Fixed
 
+- Windows: the listener no longer sets `SO_REUSEADDR`, which there allowed a second process to bind the same port; `EADDRINUSE` is reported as in Node.
 - README no longer claims object pooling for `RxRequest`/`RxResponse` (a new pair is created per request).
 
 ### Security

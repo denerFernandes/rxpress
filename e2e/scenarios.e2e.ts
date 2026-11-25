@@ -36,7 +36,8 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = join(__dirname, '..');
-const TSC_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'tsc');
+// Run tsc through node so it works on Windows too (no .cmd shim needed).
+const TSC_JS = join(REPO_ROOT, 'node_modules', 'typescript', 'bin', 'tsc');
 
 const activeServers: StartedServer[] = [];
 const activeWorkspaces: TempWorkspace[] = [];
@@ -1452,7 +1453,7 @@ main().catch((err) => {
       );
       wsEsm.writeFile('src/app.ts', buildAppSource(true));
 
-      const esmCheck = spawnSync(TSC_BIN, ['--noEmit'], {
+      const esmCheck = spawnSync(process.execPath, [TSC_JS, '--noEmit'], {
         cwd: wsEsm.dir,
         encoding: 'utf8',
         timeout: 20000,
@@ -1460,7 +1461,7 @@ main().catch((err) => {
       expect(esmCheck.stdout + esmCheck.stderr).toBe('');
       expect(esmCheck.status).toBe(0);
 
-      const esmCompile = spawnSync(TSC_BIN, [], {
+      const esmCompile = spawnSync(process.execPath, [TSC_JS], {
         cwd: wsEsm.dir,
         encoding: 'utf8',
         timeout: 20000,
@@ -1507,7 +1508,7 @@ main().catch((err) => {
       );
       wsCjs.writeFile('src/app.ts', buildAppSource(false));
 
-      const cjsCheck = spawnSync(TSC_BIN, ['--noEmit'], {
+      const cjsCheck = spawnSync(process.execPath, [TSC_JS, '--noEmit'], {
         cwd: wsCjs.dir,
         encoding: 'utf8',
         timeout: 20000,
@@ -1515,7 +1516,7 @@ main().catch((err) => {
       expect(cjsCheck.stdout + cjsCheck.stderr).toBe('');
       expect(cjsCheck.status).toBe(0);
 
-      const cjsCompile = spawnSync(TSC_BIN, [], {
+      const cjsCompile = spawnSync(process.execPath, [TSC_JS], {
         cwd: wsCjs.dir,
         encoding: 'utf8',
         timeout: 20000,

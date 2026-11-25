@@ -103,6 +103,9 @@ fn bind_reusable_listener(addr: SocketAddr) -> Result<std::net::TcpListener, Str
     };
     let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))
         .map_err(|e| format!("Failed to create socket: {e}"))?;
+    // On Unix SO_REUSEADDR only allows rebinding over TIME_WAIT (what Node does). On Windows it
+    // lets another socket bind the same port, so it is left off there, like libuv.
+    #[cfg(not(windows))]
     socket
         .set_reuse_address(true)
         .map_err(|e| format!("Failed to set SO_REUSEADDR: {e}"))?;

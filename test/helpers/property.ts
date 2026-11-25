@@ -50,12 +50,27 @@ export function prototypeSnapshot(): string[] {
   ].sort();
 }
 
-/** Asserts a value tree never exposes an unsafe own key. */
-export function hasUnsafeOwnKey(v: unknown): boolean {
+/**
+ * True if some ordinary object (one that inherits from Object.prototype) in the tree carries an
+ * own `__proto__` key: the shape that lets a later naive merge reach Object.prototype. qs output
+ * never has it; querystring may, but only on prototype-free objects, where it is plain data.
+ */
+export function hasProtoKeyOnOrdinaryObject(v: unknown): boolean {
   if (v === null || typeof v !== 'object') return false;
+  if (Object.getPrototypeOf(v) !== null && Object.prototype.hasOwnProperty.call(v, '__proto__')) {
+    return true;
+  }
   for (const k of Object.keys(v)) {
-    if ((UNSAFE_KEYS as readonly string[]).includes(k)) return true;
-    if (hasUnsafeOwnKey((v as Record<string, unknown>)[k])) return true;
+    if (hasProtoKeyOnOrdinaryObject((v as Record<string, unknown>)[k])) return true;
   }
   return false;
+}
+
+/** The value tree with every container replaced by its kind: 'array', 'object' or 'null-proto'. */
+export function protoShape(v: unknown): unknown {
+  if (v === null || typeof v !== 'object') return typeof v;
+  const kind = Array.isArray(v) ? 'array' : Object.getPrototypeOf(v) === null ? 'null-proto' : 'object';
+  const children: Record<string, unknown> = {};
+  for (const k of Object.keys(v)) children[k] = protoShape((v as Record<string, unknown>)[k]);
+  return { kind, children };
 }

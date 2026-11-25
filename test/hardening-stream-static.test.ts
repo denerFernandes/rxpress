@@ -76,7 +76,7 @@ afterEach(async () => {
   tempDirs = [];
 });
 
-describe('M2 Hardening — Feature #6: Streaming/SSE Spin-Loop, Backpressure & Framing', () => {
+describe('Streaming/SSE Spin-Loop, Backpressure & Framing', () => {
   it('eliminates closed_streams CPU spin-loop after res.end() and streamStart validation error', async () => {
     const app = rxpress();
     app.get('/stream-ok', (_req: Request, res: Response) => {
@@ -366,9 +366,9 @@ describe('M2 Hardening — Feature #6: Streaming/SSE Spin-Loop, Backpressure & F
   });
 });
 
-describe('M2 Hardening — Feature #7: Static Files, sendFile, download & Range', () => {
+describe('Static Files, sendFile, download & Range', () => {
   it('enforces res.sendFile({ root }) traversal/symlink containment, async cb(err) before headersSent, and all options', async () => {
-    const ws = makeTempDir('rxpress-m2-sf-');
+    const ws = makeTempDir('rxpress-test-sf-');
     const rootDir = join(ws, 'root');
     const outsideDir = join(ws, 'outside');
     mkdirSync(rootDir);
@@ -507,7 +507,7 @@ describe('M2 Hardening — Feature #7: Static Files, sendFile, download & Range'
   });
 
   it('res.download escapes filename, preserves source Content-Type, and does not leak headers on error', async () => {
-    const ws = makeTempDir('rxpress-m2-dl-');
+    const ws = makeTempDir('rxpress-test-dl-');
     writeFileSync(join(ws, 'source.pdf'), '%PDF-1.4\nbody');
 
     const app = rxpress();
@@ -541,7 +541,7 @@ describe('M2 Hardening — Feature #7: Static Files, sendFile, download & Range'
   });
 
   it('handles RFC 9110 Range, If-Range, 0-byte 416, multi-range 200, and cached static Ranges', async () => {
-    const ws = makeTempDir('rxpress-m2-range-');
+    const ws = makeTempDir('rxpress-test-range-');
     writeFileSync(join(ws, 'ten.txt'), '0123456789');
     writeFileSync(join(ws, 'empty.txt'), '');
 
@@ -597,7 +597,7 @@ describe('M2 Hardening — Feature #7: Static Files, sendFile, download & Range'
   });
 
   it('hardens Rust StaticMount (405, redirect, route precedence) and async JS serveStatic fallback', async () => {
-    const ws = makeTempDir('rxpress-m2-static-');
+    const ws = makeTempDir('rxpress-test-static-');
     const pub = join(ws, 'pub');
     const outside = join(ws, 'outside');
     mkdirSync(pub);
@@ -760,7 +760,7 @@ describe('M2 Hardening — Feature #7: Static Files, sendFile, download & Range'
   });
 
   it('preserves percent-encoding on 301 directory redirects in JS fallback express.static matching Rust native', async () => {
-    const ws = makeTempDir('rxpress-m2-redir-');
+    const ws = makeTempDir('rxpress-test-redir-');
     mkdirSync(join(ws, 'my dir'));
     writeFileSync(join(ws, 'my dir', 'index.html'), 'SPACE_INDEX');
 
@@ -802,7 +802,7 @@ describe('M2 Hardening — Feature #7: Static Files, sendFile, download & Range'
   });
 
   it('forwards res.sendFile errors without cb to Express error middleware across sub-routers and sync validation failures', async () => {
-    const ws = makeTempDir('rxpress-m2-sf-router-');
+    const ws = makeTempDir('rxpress-test-sf-router-');
     const pub = join(ws, 'pub');
     const outside = join(ws, 'outside');
     mkdirSync(pub);
@@ -863,7 +863,7 @@ describe('M2 Hardening — Feature #7: Static Files, sendFile, download & Range'
   });
 
   it('survives parallel multi-connection TL_STATIC_CACHE churn across >300 files without corruption', async () => {
-    const ws = makeTempDir('rxpress-m2-cache-churn-');
+    const ws = makeTempDir('rxpress-test-cache-churn-');
     const fileCount = 320;
     const expectedBodies: string[] = [];
     for (let i = 0; i < fileCount; i++) {
@@ -923,7 +923,7 @@ describe('M2 Hardening — Feature #7: Static Files, sendFile, download & Range'
   });
 
   it('enforces forward-only error middleware ordering across app and sub-routers for res.sendFile without cb', async () => {
-    const ws = makeTempDir('rxpress-m2-scenario-c-');
+    const ws = makeTempDir('rxpress-test-scenario-c-');
     const pub = join(ws, 'pub');
     const outside = join(ws, 'outside');
     mkdirSync(pub);
@@ -1026,7 +1026,7 @@ describe('M2 Hardening — Feature #7: Static Files, sendFile, download & Range'
   });
 
   it('continues downstream with full req.path when res.sendFile targets a directory without cb inside a mounted router', async () => {
-    const ws = makeTempDir('rxpress-m2-sf-dir-');
+    const ws = makeTempDir('rxpress-test-sf-dir-');
     const pub = join(ws, 'pub');
     mkdirSync(pub);
     mkdirSync(join(pub, 'subdir'));
@@ -1056,7 +1056,7 @@ describe('M2 Hardening — Feature #7: Static Files, sendFile, download & Range'
   });
 
   it('defaults res.sendFile cacheControl to true (public, max-age=0) and honors cacheControl: false', async () => {
-    const ws = makeTempDir('rxpress-m2-sf-cc-');
+    const ws = makeTempDir('rxpress-test-sf-cc-');
     writeFileSync(join(ws, 'ten.txt'), '0123456789');
 
     const app = rxpress();
@@ -1090,7 +1090,7 @@ describe('M2 Hardening — Feature #7: Static Files, sendFile, download & Range'
 });
 
 function generateSelfSignedCert(): { key: Buffer; cert: Buffer } {
-  const dir = makeTempDir('rxpress-m2-tls-');
+  const dir = makeTempDir('rxpress-test-tls-');
   const keyPath = join(dir, 'key.pem');
   const certPath = join(dir, 'cert.pem');
   execSync(
@@ -1138,7 +1138,7 @@ function httpsFetchText(
 
 describe('regressions: repeated listen(), 4-arg error handlers and param() async next', () => {
   it('preserves req.next and leakedNext: false across repeated app.listen() and app.listenTls() on the same Application', async () => {
-    const ws = makeTempDir('rxpress-m2-repeat-listen-');
+    const ws = makeTempDir('rxpress-test-repeat-listen-');
     const pub = join(ws, 'pub');
     mkdirSync(pub);
     mkdirSync(join(pub, 'subdir'));
@@ -1245,7 +1245,7 @@ describe('regressions: repeated listen(), 4-arg error handlers and param() async
   });
 
   it('forwards 4-arg error handler res.sendFile without cb across fast-throw, non-fast, route-level, and dir continuation without looping or hanging', async () => {
-    const ws = makeTempDir('rxpress-m2-err-sf-');
+    const ws = makeTempDir('rxpress-test-err-sf-');
     const pub = join(ws, 'pub');
     mkdirSync(pub);
     mkdirSync(join(pub, 'subdir'));
@@ -1324,7 +1324,7 @@ describe('regressions: repeated listen(), 4-arg error handlers and param() async
   });
 
   it('wires req.next for app.param(), router.param() (with and without prior middleware), and mounted subApp.param()', async () => {
-    const ws = makeTempDir('rxpress-m2-param-sf-');
+    const ws = makeTempDir('rxpress-test-param-sf-');
     const pub = join(ws, 'pub');
     mkdirSync(pub);
     mkdirSync(join(pub, 'subdir'));

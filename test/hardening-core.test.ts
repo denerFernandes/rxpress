@@ -67,7 +67,7 @@ function sendRawAndReadAll(
 }
 
 function generateSelfSignedCert(): { key: Buffer; cert: Buffer } {
-  const dir = mkdtempSync(join(tmpdir(), 'rxpress-m1-tls-'));
+  const dir = mkdtempSync(join(tmpdir(), 'rxpress-test-tls-'));
   tempDirs.push(dir);
   const keyPath = join(dir, 'key.pem');
   const certPath = join(dir, 'cert.pem');
@@ -81,7 +81,7 @@ function generateSelfSignedCert(): { key: Buffer; cert: Buffer } {
   };
 }
 
-describe('M1 Core Production Hardening', () => {
+describe('core engine behaviour', () => {
   describe('1. Engine Timeouts', () => {
     it('returns 408 and closes when headers stall (headersTimeoutMs)', async () => {
       const app = rxpress();
@@ -446,7 +446,7 @@ describe('M1 Core Production Hardening', () => {
     });
 
     it('emits Connection: close on static fast-path responses when requested', async () => {
-      const dir = mkdtempSync(join(tmpdir(), 'rxpress-m1-static-'));
+      const dir = mkdtempSync(join(tmpdir(), 'rxpress-test-static-'));
       tempDirs.push(dir);
       writeFileSync(join(dir, 'hello.txt'), 'static-hello');
 

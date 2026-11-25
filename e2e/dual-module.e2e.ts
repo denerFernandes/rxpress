@@ -10,7 +10,8 @@ import { itRxpress } from './helpers/server.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const REPO_ROOT = join(__dirname, '..');
-const TSC_BIN = join(REPO_ROOT, 'node_modules', '.bin', 'tsc');
+// Run tsc through node so it works on Windows too (no .cmd shim needed).
+const TSC_JS = join(REPO_ROOT, 'node_modules', 'typescript', 'bin', 'tsc');
 
 const workspaces: TempWorkspace[] = [];
 
@@ -40,7 +41,7 @@ function runTsc(
   cwd: string,
   args: string[] = ['--noEmit']
 ): { status: number | null; stdout: string; stderr: string } {
-  const res = spawnSync(TSC_BIN, args, {
+  const res = spawnSync(process.execPath, [TSC_JS, ...args], {
     cwd,
     encoding: 'utf8',
     timeout: 20000,

@@ -8,3 +8,6 @@ native/
 # prebuilt binaries placed into platform packages by build/release
 npm/*/*.node
 node_modules
+
+# soak test output
+bench/soak-results.csv

@@ -149,9 +149,9 @@ describe('Streamed request bodies', () => {
     app.post('/count', (req, res) => {
       let events = 0;
       let bytes = 0;
-      req.on('data', (c: Buffer) => {
+      req.on('data', (c: unknown) => {
         events++;
-        bytes += c.length;
+        bytes += (c as Buffer).length;
       });
       req.on('end', () => res.json({ events, bytes }));
     });

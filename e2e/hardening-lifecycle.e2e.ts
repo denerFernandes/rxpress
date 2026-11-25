@@ -98,7 +98,7 @@ describe('Graceful Shutdown & Server Lifecycle', () => {
     const srv = app.listen(0, '127.0.0.1');
     trackClosable(() => closeServerHandle(srv));
 
-    // Assert EventEmitter interface upfront so pre-M3 builds fail fast without 30s timeout
+    // Assert EventEmitter interface upfront so older builds fail fast without 30s timeout
     expect(typeof srv.on).toBe('function');
 
     let listeningCount = 0;
@@ -205,7 +205,7 @@ describe('Graceful Shutdown & Server Lifecycle', () => {
     const srv = await startServer(app, { timeouts: cfg });
     trackClosable(() => srv.close());
 
-    // Fail fast on pre-M3 builds lacking closeAllConnections
+    // Fail fast on builds lacking closeAllConnections
     expect(typeof srv.server.closeAllConnections).toBe('function');
 
     const sseClient = trackSocket(await openRawSocket(srv.host, srv.port));

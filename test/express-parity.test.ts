@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import rxpress from '../js/index.js';
-import { parseQueryString, parseUrlencodedBody } from '../js/security.js';
+import { parseQueryString, parseUrlencodedBody, safeJsonParse } from '../js/security.js';
 
 const require = createRequire(import.meta.url);
 const qs = require('qs') as { parse(s: string, o?: object): unknown };
@@ -115,12 +115,23 @@ describe('qs parity (extended query/body parser)', () => {
     }
   });
 
-  it('drops prototype-polluting keys at any depth', () => {
-    const q = parseQueryString('__proto__[x]=1&a[constructor][prototype]=2&b[__proto__]=3&c=ok', {
-      mode: 'extended',
-    });
-    expect(plain(q)).toEqual({ c: 'ok' });
+  it('handles prototype keys exactly like qs: only __proto__ is dropped, nothing is polluted', () => {
+    const s = '__proto__[x]=1&a[constructor][prototype]=2&b[__proto__]=3&c=ok&hasOwnProperty=4';
+    const q = parseQueryString(s, { mode: 'extended' });
+    expect(plain(q)).toEqual(plain(qs.parse(s, { allowPrototypes: true })));
+    expect(plain(q)).toEqual({ a: { constructor: { prototype: '2' } }, b: {}, c: 'ok', hasOwnProperty: '4' });
+    expect(Object.getPrototypeOf(q)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(q, '__proto__')).toBe(false);
     expect(({} as Record<string, unknown>).x).toBeUndefined();
+  });
+
+  it('JSON bodies keep __proto__ as an own key like body-parser (JSON.parse)', () => {
+    const src = '{"__proto__":{"polluted":1},"a":{"__proto__":{"y":2}},"ok":true}';
+    const ours = safeJsonParse(src) as Record<string, unknown>;
+    expect(plain(ours)).toEqual(plain(JSON.parse(src)));
+    expect(Object.prototype.hasOwnProperty.call(ours, '__proto__')).toBe(true);
+    expect(Object.getPrototypeOf(ours)).toBe(Object.prototype);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it('urlencoded bodies deeper than 32 levels are a 400 (body-parser strictDepth)', () => {

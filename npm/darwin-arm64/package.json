@@ -13,7 +13,7 @@
     "rxpress.darwin-arm64.node"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "license": "MIT",
   "repository": {

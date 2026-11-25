@@ -13,7 +13,7 @@
     "rxpress.win32-x64-msvc.node"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "license": "MIT",
   "repository": {
