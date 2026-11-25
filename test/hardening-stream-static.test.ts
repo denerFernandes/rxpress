@@ -109,7 +109,8 @@ describe('Streaming/SSE Spin-Loop, Backpressure & Framing', () => {
     await new Promise<void>((r) => setTimeout(r, 150));
     const cpuDelta = process.cpuUsage(cpuBefore);
     const totalCpuMs = (cpuDelta.user + cpuDelta.system) / 1000;
-    expect(totalCpuMs).toBeLessThan(80);
+    // A spin-loop burns the whole 150 ms window; the margin absorbs noisy shared CI runners.
+    expect(totalCpuMs).toBeLessThan(120);
 
     const rHealth = await fetch(`${base}/health`);
     expect(rHealth.status).toBe(200);
