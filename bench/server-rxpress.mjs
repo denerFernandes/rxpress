@@ -10,6 +10,8 @@ const staticDir = join(__dirname, 'public');
 const app = express();
 app.disable('x-powered-by');
 app.set('etag', false);
+// ioThreads: the engine's I/O threads (default 1; the throughput tables use 4).
+if (process.env.IO_THREADS) app.set('ioThreads', Number(process.env.IO_THREADS));
 
 app.use('/static', express.static(staticDir));
 

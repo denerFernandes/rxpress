@@ -19,7 +19,13 @@ writeFileSync(
 function startServer(script, port) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [script], {
-      env: { ...process.env, PORT: String(port), NODE_ENV: 'production' },
+      env: {
+        ...process.env,
+        PORT: String(port),
+        NODE_ENV: 'production',
+        // The peak-throughput numbers in the README use 4 I/O threads (the default is 1).
+        ...(script.includes('rxpress') ? { IO_THREADS: process.env.IO_THREADS || '4' } : {}),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stderr = '';

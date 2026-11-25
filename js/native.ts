@@ -21,6 +21,8 @@ export interface NativeServerConfig {
   maxHeaderSizeBytes?: number;
   defaultBodyLimitBytes?: number;
   streamQueueCapacity?: number;
+  /** Threads of the engine's I/O runtime (created once per process; default 1). */
+  ioThreads?: number;
 }
 
 export interface NativeStaticMount {

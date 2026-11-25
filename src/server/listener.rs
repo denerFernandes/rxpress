@@ -65,15 +65,36 @@ impl Drop for ConnectionGuard {
 
 static IO_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
 
+/// Worker threads requested through the `ioThreads` setting (0 = not set).
+static IO_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+/// Threads of the I/O runtime when nothing asks for more. One thread does the socket work of a
+/// JS-bound server (JS handlers are the bottleneck) and costs far less CPU per request than
+/// several threads waking each other up; `ioThreads` raises it for TLS or static-heavy loads.
+const DEFAULT_IO_THREADS: usize = 1;
+
+/// Sets the I/O runtime's thread count (the `ioThreads` setting). The runtime is created once per
+/// process, when the first server starts, so this only takes effect before that.
+pub fn set_io_threads(n: usize) {
+    if n >= 1 {
+        IO_THREADS.store(n, Ordering::Relaxed);
+    }
+}
+
+fn io_thread_count() -> usize {
+    // `RXPRESS_IO_THREADS` is the operator's override, then the `ioThreads` setting.
+    std::env::var("RXPRESS_IO_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n >= 1)
+        .or_else(|| Some(IO_THREADS.load(Ordering::Relaxed)).filter(|n| *n >= 1))
+        .unwrap_or(DEFAULT_IO_THREADS)
+}
+
 pub fn get_io_runtime() -> &'static tokio::runtime::Runtime {
     IO_RUNTIME.get_or_init(|| {
-        let cores = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
-        // Leave headroom for Node's main thread + wrk/clients; cap at 4 P-cores
-        let workers = cores.clamp(2, 4);
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(workers)
+            .worker_threads(io_thread_count())
             .enable_all()
             .thread_name("rxpress-io")
             .build()

@@ -737,6 +737,13 @@ describe('core engine behaviour', () => {
         }
       }
 
+      // ioThreads is a thread count: at least 1.
+      for (const bad of [0, 257, ...invalidValues]) {
+        const app = rxpress();
+        app.set('ioThreads', bad);
+        expect(() => app.listen(0, '127.0.0.1')).toThrow(RangeError);
+      }
+
       // Also validates on listenTls
       const tlsApp = rxpress();
       tlsApp.set('tlsHandshakeTimeoutMs', -1);

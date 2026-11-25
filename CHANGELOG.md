@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Changed
+
+- The engine's I/O runtime uses one thread by default (it used up to four). Per request it uses 37-51% less CPU than Express 5 on dynamic routes (was ~7%), at the cost of peak pipelined throughput; `app.set('ioThreads', n)` or `RXPRESS_IO_THREADS` raise it (the runtime is created once per process).
+- `npm run bench:resources` compares memory and CPU against Express 5; `npm run bench` runs rxpress with `ioThreads: 4`.
+
 ## [0.1.0] - 2026-11-25
 
 First release, published on npm as `@rxpress/rxpress` (the unscoped `rxpress` name belongs to another package); the binaries are `@rxpress/rxpress-<target>`.

@@ -27,6 +27,7 @@ const OPTIONAL_NUMERIC_SETTINGS: Array<[string, keyof NativeServerConfig]> = [
   ['maxHeaderSizeBytes', 'maxHeaderSizeBytes'],
   ['defaultBodyLimitBytes', 'defaultBodyLimitBytes'],
   ['streamQueueCapacity', 'streamQueueCapacity'],
+  ['ioThreads', 'ioThreads'],
 ];
 
 function buildNativeConfig(app: Application): NativeServerConfig {
@@ -51,6 +52,9 @@ function buildNativeConfig(app: Application): NativeServerConfig {
       throw new RangeError(
         `Invalid ${settingKey}: ${String(val)} (expected integer 0..4294967295)`
       );
+    }
+    if (settingKey === 'ioThreads' && (val < 1 || val > 256)) {
+      throw new RangeError(`Invalid ioThreads: ${val} (expected integer 1..256)`);
     }
     (nativeCfg as Record<string, unknown>)[cfgKey] = val === 0 ? 0 : val;
   }

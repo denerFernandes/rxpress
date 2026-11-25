@@ -17,7 +17,7 @@ mod read_body;
 mod respond_buffered;
 mod respond_stream;
 
-pub use listener::{drain_server, get_io_runtime, start_http_server_sync};
+pub use listener::{drain_server, get_io_runtime, set_io_threads, start_http_server_sync};
 
 use crate::body::BodyRule;
 use crate::config::{EngineConfig, EtagMode};

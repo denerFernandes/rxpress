@@ -2,6 +2,12 @@
 
 HTTP/HTTPS server for Node.js with the networking engine written in Rust (N-API), compatible with **Express 5**: same API, `async` handlers, and third-party middleware such as `cors`, `helmet` and `morgan`.
 
+## Why rxpress
+
+rxpress exists to run an Express 5 application with **less memory and less CPU**. The networking (HTTP parsing, TLS, static files, body limits, routing of static paths) runs in Rust, so the JavaScript side only does the work your handlers ask for: fewer allocations per request, less garbage for V8 to collect and fewer cycles spent on protocol work.
+
+Performance is a consequence of that, not the goal: when every request costs less CPU, the same machine serves more of them. The numbers are in [Resource usage](#resource-usage-versus-express-5); the throughput tables come after them.
+
 ## Installation
 
 ```bash
@@ -22,7 +28,51 @@ The native binary ships in per-platform packages (`@rxpress/rxpress-<target>`) i
 
 If no binary loads, the error names the expected package. In a clone of the repository, `npm run build:native` produces `native/rxpress.node`, which takes precedence over the platform packages.
 
-**Windows:** the `'upgrade'` event (WebSocket) is not supported yet, because handing the socket over to JS is Unix-only. Everything else behaves the same. Until that lands, the Windows test job in CI is informational (`continue-on-error`).
+**Windows:** the `'upgrade'` event (WebSocket) is not supported yet, because handing the socket over to JS is Unix-only. Everything else behaves the same, and the Windows test job is part of CI like the other platforms.
+
+## Resource usage versus Express 5
+
+Same 45-route app on both servers, each in its own process, under the same `wrk` load (`-t4 -c64`; the last row uses 512 connections). Memory is the RSS of the whole process and CPU is the CPU time of the whole process, Rust threads included; **CPU per request** is that CPU time divided by the requests served, so it does not depend on how many requests per second each server manages. Median of 5 runs, 6 s of load per scenario, Node.js v24, Apple M1 Pro.
+
+**Memory (RSS)**
+
+| | Express 5 | **rxpress** | |
+| --- | ---: | ---: | ---: |
+| Idle | 64 MB | **60 MB** | about the same (Node itself is most of it) |
+| Peak under load | 189 MB | **88 MB** | **54% less** |
+
+**CPU per request**
+
+| Scenario | Express 5 | **rxpress** | CPU saved |
+| --- | ---: | ---: | ---: |
+| `GET /ping` (plain text) | 22.7 µs | **13.5 µs** | **41%** |
+| `GET /json` (JSON API) | 22.1 µs | **13.3 µs** | **40%** |
+| `GET /users/:id/posts/:postId?sort=desc` | 23.9 µs | **14.9 µs** | **37%** |
+| `POST /echo` (`express.json()`) | 29.6 µs | **14.6 µs** | **51%** |
+| `GET /cors` (real `cors` middleware) | 23.3 µs | **14.5 µs** | **38%** |
+| `GET /static/sample.json` (`express.static`) | 108.6 µs | **8.3 µs** | **92%** |
+| `GET /json`, 512 connections | 24.7 µs | **13.8 µs** | **44%** |
+
+Throughput in the same runs (requests per second, Express 5 -> rxpress): `/ping` 42,429 -> 98,431; `/json` 44,592 -> 101,062; params 41,070 -> 95,031; `POST /echo` 33,221 -> 98,025; `/cors` 41,598 -> 94,326; static 16,698 -> 114,149; `/json` with 512 connections 38,099 -> 93,652.
+
+What these numbers do and do not say:
+
+- Memory under load is about half; **idle memory is not**, since a Node process starts at around 60 MB either way. The difference comes from how much garbage each request leaves behind: Express's heap grew to ~190 MB under load, rxpress's stayed around 90 MB.
+- CPU per request is 37-51% lower on dynamic routes, not 50% on all of them, and 92% lower on static files.
+- They measure the server on minimal handlers. In a real application your code, middleware, database and network calls dominate, and the saving shrinks accordingly. Measure with your own application.
+- They were taken on a laptop that was running other programs (load average around 10 on 10 cores), hence the median of several runs; absolute numbers will differ on your hardware. Reproduce them with `npm run build && RUNS=5 npm run bench:resources` (requires `wrk`).
+
+### `ioThreads`: CPU versus peak throughput
+
+The engine's Tokio runtime uses **one I/O thread by default**. Threads that hand work to each other cost CPU in the kernel on every request, and a single thread is enough to keep the JavaScript thread busy, which is what limits most apps. You can raise it with `app.set('ioThreads', n)` before the first server starts (the runtime is created once per process; the `RXPRESS_IO_THREADS` environment variable overrides it):
+
+| `GET /json`, 64 connections | req/s | CPU per request |
+| --- | ---: | ---: |
+| Express 5 | ~43,500 | 22.7 µs |
+| rxpress, `ioThreads: 1` (default) | ~97,000 | 13.8 µs |
+| rxpress, `ioThreads: 4` | ~150,000 | 22.1 µs |
+
+Raise it when you want peak throughput (the pipelined tables below use 4), or for TLS or static-file-heavy servers on multi-core machines, where the Rust side does real work.
 
 ## Benchmarks (Apple M1 Pro, Node.js v24, same 45-route API)
 
@@ -33,6 +83,8 @@ Measured on a single machine and not reproduced on other hardware; absolute numb
 ```bash
 npm run build && node bench/run.mjs
 ```
+
+These throughput tables use `ioThreads: 4` for rxpress (the default is 1, see above); `npm run bench` sets it for you.
 
 ### 1. Peak throughput (`wrk -t4 -c128`, HTTP/1.1 pipeline depth 10)
 
@@ -60,7 +112,7 @@ npm run build && node bench/run.mjs
 
 ## Architecture
 
-- **HTTP/1.1 + HTTPS engine in Rust** (`src/server/`, `src/http_parse/`, `src/tls.rs`): strict HTTP/1.1 parser, multi-threaded Tokio runtime, `TCP_NODELAY`, batched pipelining with write coalescing, and TLS through `tokio-rustls` (`ring`).
+- **HTTP/1.1 + HTTPS engine in Rust** (`src/server/`, `src/http_parse/`, `src/tls.rs`): strict HTTP/1.1 parser, Tokio runtime (one I/O thread by default, `ioThreads` raises it), `TCP_NODELAY`, batched pipelining with write coalescing, and TLS through `tokio-rustls` (`ring`).
 - **Radix-tree router in Rust** (`src/router.rs`): `matchit` resolves static routes, `:param` and `*splat` in O(path length), and falls back to the full Express-style router for `RegExp` routes, optional parameters, duplicate routes using `next('route')` and dynamic sub-routers.
 - **Batched N-API bridge** (`src/protocol/`, `src/slots.rs`, `js/protocol.ts`):
   - Lock-free queue (`SegQueue`) plus a preallocated slot table (`SlotTable`), with no `oneshot::channel` or `HashMap` per request.
@@ -213,6 +265,7 @@ npm test             # Unit and compatibility tests
 npm run test:e2e     # End-to-end tests against rxpress and Express 5
 npm run test:express # Express 5.3.0's own test suite against rxpress
 npm run bench        # Benchmark against Express 5 with wrk
+npm run bench:resources # Memory and CPU against Express 5 (RUNS=5 for a median)
 ```
 
 ## License

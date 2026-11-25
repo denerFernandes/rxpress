@@ -59,6 +59,7 @@ pub struct NativeServerConfig {
     pub max_header_size_bytes: Option<u32>,
     pub default_body_limit_bytes: Option<u32>,
     pub stream_queue_capacity: Option<u32>,
+    pub io_threads: Option<u32>,
 }
 
 #[napi(object)]
@@ -592,6 +593,9 @@ fn apply_config(config: &mut EngineConfig, c: NativeServerConfig) {
     if let Some(v) = c.handler_timeout_ms {
         config.set_handler_timeout_ms(v);
     }
+    if let Some(v) = c.io_threads {
+        server::set_io_threads(v as usize);
+    }
     if let Some(v) = c.write_timeout_ms {
         config.set_write_timeout_ms(v);
     }
@@ -650,6 +654,7 @@ mod tests {
                 max_header_size_bytes: None,
                 default_body_limit_bytes: None,
                 stream_queue_capacity: None,
+                io_threads: None,
             },
         );
         assert!(!cfg.x_powered_by);

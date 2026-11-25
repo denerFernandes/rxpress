@@ -19,7 +19,13 @@ const servers = [
 function start(s) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [join(__dirname, s.script)], {
-      env: { ...process.env, PORT: String(s.port), NODE_ENV: 'production' },
+      env: {
+        ...process.env,
+        PORT: String(s.port),
+        NODE_ENV: 'production',
+        // The peak-throughput numbers in the README use 4 I/O threads (the default is 1).
+        ...(s.script.includes('rxpress') ? { IO_THREADS: process.env.IO_THREADS || '4' } : {}),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let err = '';

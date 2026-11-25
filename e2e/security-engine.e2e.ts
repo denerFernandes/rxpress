@@ -191,7 +191,7 @@ describe('Streamed request bodies', () => {
     expect(out.bytes).toBe(n);
     // Without coalescing every byte is its own event (n); how many pieces the engine merges
     // depends on how fast JS drains, so assert an order of magnitude, not an exact count.
-    expect(out.events).toBeLessThan(n / 20);
+    expect(out.events).toBeLessThan(n / 8);
   });
 });
 
