@@ -99,7 +99,7 @@ jobs:
             '
           sudo chown -R "$(id -u):$(id -g)" npm target || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bindings-${{ matrix.suffix }}
           path: npm/${{ matrix.suffix }}/rxpress.${{ matrix.suffix }}.node
