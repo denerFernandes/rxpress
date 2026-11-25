@@ -577,7 +577,9 @@ describe('core engine behaviour', () => {
       const app = rxpress();
       app.set('shutdownTimeoutMs', 2000);
       let handlerCompleted = false;
+      let handlerStarted = false;
       app.get('/slow', async (_req: Request, res: Response) => {
+        handlerStarted = true;
         await new Promise((r) => setTimeout(r, 80));
         handlerCompleted = true;
         res.send('finished');
@@ -585,9 +587,11 @@ describe('core engine behaviour', () => {
 
       const { handle, port, base } = startApp(app);
 
-      // Start in-flight request
+      // Start in-flight request and wait until the handler is really running (a fixed delay
+      // is not enough on a slow CI runner: close() would reset a connection still being set up).
       const respPromise = fetch(`${base}/slow`);
-      await new Promise((r) => setTimeout(r, 20));
+      const startedBy = Date.now() + 5000;
+      while (!handlerStarted && Date.now() < startedBy) await new Promise((r) => setTimeout(r, 5));
 
       // Trigger graceful close while request is active
       const closePromise = handle.close();
