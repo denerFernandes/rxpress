@@ -67,10 +67,31 @@ function rawRequest(
 }
 
 /** A minimal cookie jar: fetch does not keep cookies between calls. */
+/**
+ * Session options as production sets them: a `Secure`, `HttpOnly` cookie. The test server speaks
+ * plain HTTP, so it plays the part of an app behind a TLS-terminating proxy: `trust proxy` plus an
+ * `X-Forwarded-Proto: https` header (the Jar adds it), which is how `req.secure` becomes true.
+ */
+function sessionOptions(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const { cookie, ...rest } = extra as { cookie?: Record<string, unknown> };
+  return {
+    secret: 'k',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: true, httpOnly: true, sameSite: 'lax', ...cookie },
+    ...rest,
+  };
+}
+
+function behindProxy(app: ReturnType<typeof rxpress>): void {
+  app.set('trust proxy', true);
+}
+
 class Jar {
   private cookies = new Map<string, string>();
   async fetch(url: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
+    headers.set('x-forwarded-proto', 'https');
     if (this.cookies.size) {
       headers.set('cookie', [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; '));
     }
@@ -93,7 +114,8 @@ class Jar {
 describe('express-session', () => {
   it('keeps a counter per session cookie and a new session per client', async () => {
     const app = rxpress();
-    app.use(session({ secret: 'k', resave: false, saveUninitialized: false }));
+    behindProxy(app);
+    app.use(session(sessionOptions()));
     app.get('/views', (req: Any, res: Any) => {
       req.session.views = (req.session.views || 0) + 1;
       res.json({ views: req.session.views });
@@ -104,7 +126,10 @@ describe('express-session', () => {
     const b = new Jar();
     const first = await a.fetch(base + '/views');
     expect(await first.json()).toEqual({ views: 1 });
-    expect(first.headers.getSetCookie()[0]).toMatch(/^connect\.sid=s%3A[^;]+; Path=\/; HttpOnly/);
+    const cookie = first.headers.getSetCookie()[0];
+    expect(cookie).toMatch(/^connect\.sid=s%3A[^;]+; Path=\//);
+    expect(cookie).toMatch(/; HttpOnly/);
+    expect(cookie).toMatch(/; Secure/);
     expect(await (await a.fetch(base + '/views')).json()).toEqual({ views: 2 });
     expect(await (await a.fetch(base + '/views')).json()).toEqual({ views: 3 });
     expect(await (await b.fetch(base + '/views')).json()).toEqual({ views: 1 });
@@ -112,7 +137,8 @@ describe('express-session', () => {
 
   it('regenerate() and destroy() work, and an unmodified session sets no cookie', async () => {
     const app = rxpress();
-    app.use(session({ secret: 'k', resave: false, saveUninitialized: false }));
+    behindProxy(app);
+    app.use(session(sessionOptions()));
     app.get('/untouched', (_req, res) => res.send('ok'));
     app.get('/set', (req: Any, res: Any) => {
       req.session.user = 'ana';
@@ -144,25 +170,42 @@ describe('express-session', () => {
     expect(await (await jar.fetch(base + '/who')).text()).toBe('nobody');
   });
 
-  it('cookie options: maxAge sets Expires, rolling refreshes, httpOnly can be turned off', async () => {
+  it('cookie options: Secure, HttpOnly, SameSite and maxAge reach the Set-Cookie header', async () => {
     const app = rxpress();
+    behindProxy(app);
     app.use(
-      session({
-        secret: 'k',
-        name: 'sid',
-        resave: false,
-        saveUninitialized: true,
-        cookie: { maxAge: 60_000, httpOnly: false, sameSite: 'lax' },
-      })
+      session(
+        sessionOptions({
+          name: 'sid',
+          saveUninitialized: true,
+          cookie: { maxAge: 60_000, sameSite: 'strict', path: '/app' },
+        })
+      )
     );
-    app.get('/', (_req, res) => res.send('ok'));
+    app.get('/app', (_req, res) => res.send('ok'));
     const base = await serve(app);
-    const res = await fetch(base + '/');
+
+    const res = await new Jar().fetch(base + '/app');
     const cookie = res.headers.getSetCookie()[0];
     expect(cookie).toMatch(/^sid=s%3A/);
-    expect(cookie).toMatch(/Expires=/);
-    expect(cookie).toMatch(/SameSite=Lax/);
-    expect(cookie).not.toMatch(/HttpOnly/);
+    expect(cookie).toMatch(/; Path=\/app/);
+    expect(cookie).toMatch(/; Expires=/);
+    expect(cookie).toMatch(/; HttpOnly/);
+    expect(cookie).toMatch(/; Secure/);
+    expect(cookie).toMatch(/; SameSite=Strict/);
+  });
+
+  it('does not set a Secure cookie on a plain connection (no proxy header)', async () => {
+    const app = rxpress();
+    behindProxy(app);
+    app.use(session(sessionOptions({ saveUninitialized: true })));
+    app.get('/', (_req, res) => res.send('ok'));
+    const base = await serve(app);
+
+    const plain = await fetch(base + '/');
+    expect(plain.headers.getSetCookie()).toEqual([]);
+    const proxied = await fetch(base + '/', { headers: { 'x-forwarded-proto': 'https' } });
+    expect(proxied.headers.getSetCookie()).toHaveLength(1);
   });
 });
 
@@ -211,7 +254,8 @@ describe('passport (passport-local) with express-session', () => {
     const app = rxpress();
     app.use(rxpress.urlencoded({ extended: false }));
     app.use(rxpress.json());
-    app.use(session({ secret: 'k', resave: false, saveUninitialized: false }));
+    behindProxy(app);
+    app.use(session(sessionOptions()));
     app.use(authn.initialize());
     app.use(authn.session());
 
@@ -544,7 +588,8 @@ describe('Socket.IO', () => {
 
   it('works next to express-session and an authenticated route', async () => {
     const app = rxpress();
-    app.use(session({ secret: 'k', resave: false, saveUninitialized: true }));
+    behindProxy(app);
+    app.use(session(sessionOptions({ saveUninitialized: true })));
     app.get('/count', (req: Any, res: Any) => {
       req.session.n = (req.session.n || 0) + 1;
       res.json({ n: req.session.n });
