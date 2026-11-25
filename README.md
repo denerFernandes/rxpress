@@ -261,6 +261,24 @@ Works unchanged:
 - Mounting an app or `Router()` created by another copy of Express (a package that bundles its own `express`) in rxpress: `app.use('/admin', expressApp)`. As with an Express sub-app, it receives `'mount'` and `mountpath`/`parent`, inherits the rxpress app's settings (for example `trust proxy`) and keeps its own (for example `json spaces`); `req.app` is the sub-app, and `next()` and errors go back to rxpress. It runs in the same process and the same request, with no network hop.
 - Large streamed uploads: `multer`/`busboy`, `req.pipe(fs.createWriteStream(...))`, full-duplex `req.pipe(res)`, `for await`.
 
+### Libraries tested on rxpress
+
+These real npm packages, unmodified, run in `test/real-libraries.test.ts` against complete flows over HTTP (nothing is mocked); the tested versions are the ones in `devDependencies`.
+
+| Library | What is exercised |
+| --- | --- |
+| `express-session` | cookie per client, counter across requests, `regenerate()`, `destroy()`, no cookie for an untouched session, cookie options |
+| `cookie-parser` | plain and signed cookies, a tampered signature |
+| `passport` + `passport-local` | form and JSON login, session persistence, failure redirect, `req.isAuthenticated()`, `req.logout()` |
+| `multer` | memory and disk storage, a 5 MB upload intact, several files, size limits reported to the error handler |
+| `compression` | gzip of a large body, a small body left alone, streamed `res.write()`, `HEAD`, `304` with the ETag |
+| `socket.io` 4 | events with acknowledgements, rooms, broadcasts, namespaces, a 400 KB payload, on the `polling` and `websocket` transports and the upgrade between them, attached to `app.listen()` and to `http.createServer(app)`, next to `express-session` |
+| `cors`, `helmet`, `morgan`, `body-parser`, `raw-body`, `on-finished` | covered by the end-to-end and interoperability tests |
+
+A server's `'request'` listeners are called as in Node: the app is one of them, and a library that wraps the listeners (Socket.IO and engine.io do) sees every request and passes the rest to the app. Without extra listeners requests go straight to the app, which is the fast path.
+
+Not yet covered by a test: other Socket.IO versions, `express-rate-limit`, `http-proxy-middleware`, GraphQL servers, Vendure. An application that depends on one of them should be tried before relying on it; reports of what works or fails are welcome.
+
 ### Request body: buffered or streamed
 
 - When a route uses rxpress's `express.json()`/`urlencoded()`/`text()`/`raw()` and the request matches the type, the engine reads and limits the body in Rust before calling JS (fast path).
@@ -287,7 +305,7 @@ When the `app` receives Node's own `req`/`res` (mounted in a real Express app, a
 
 ### Known limitations of the native server
 
-- Extra `'request'`/`'connection'` listeners on the server are not called (for example socket.io's polling transport; the `websocket` transport works).
+- `'connection'` listeners on the server are not called (the engine owns the sockets). `'request'` listeners are: see [Libraries tested](#libraries-tested-on-rxpress).
 - `listen()` on a UNIX socket is not supported.
 - `req.socket.remotePort` is `undefined`.
 - `req`/`res` are not `instanceof http.IncomingMessage`/`ServerResponse`.
