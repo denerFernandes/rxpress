@@ -6,9 +6,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+/// A file response reached the client in full.
+pub const FILE_SENT: u32 = 0;
+/// A file response did not: the client went away or the write failed. Any larger code is the
+/// HTTP status the engine answered with instead (404, 403...).
+pub const FILE_ABORTED: u32 = 1;
+
 pub struct CloseNotifier {
     pub closed_queue: Arc<SegQueue<u32>>,
     pub drained_queue: Arc<SegQueue<u32>>,
+    /// `(token, code)` pairs for `res.sendFile()` calls waiting for their callback.
+    pub file_queue: Arc<SegQueue<(u32, u32)>>,
     pub wakeup: Arc<dyn Fn() + Send + Sync>,
     pub scheduled: Arc<AtomicBool>,
 }
@@ -23,11 +31,63 @@ impl CloseNotifier {
     }
 
     #[inline]
+    pub fn notify_file(&self, token: u32, code: u32) {
+        self.file_queue.push((token, code));
+        if !self.scheduled.swap(true, Ordering::SeqCst) {
+            (self.wakeup)();
+        }
+    }
+
+    #[inline]
     pub fn notify_drained(&self, req_id: u32) {
         self.drained_queue.push(req_id);
         if !self.scheduled.swap(true, Ordering::SeqCst) {
             (self.wakeup)();
         }
+    }
+}
+
+/// Reports how a file response ended to the `res.sendFile()` callback waiting for it.
+///
+/// It travels with the response, so wherever the response ends up the callback is answered: the
+/// connection finishes it with the real outcome, and if the response is dropped instead (the client
+/// disconnected before or while it was written, the slot was abandoned) `Drop` reports
+/// [`FILE_ABORTED`].
+pub struct FileNotify {
+    token: u32,
+    notifier: Arc<CloseNotifier>,
+    sent: bool,
+}
+
+impl FileNotify {
+    pub fn new(token: u32, notifier: Arc<CloseNotifier>) -> Self {
+        Self {
+            token,
+            notifier,
+            sent: false,
+        }
+    }
+
+    /// The response ended with `code` ([`FILE_SENT`], [`FILE_ABORTED`] or an HTTP status).
+    pub fn finish(mut self, code: u32) {
+        self.sent = true;
+        self.notifier.notify_file(self.token, code);
+    }
+}
+
+impl Drop for FileNotify {
+    fn drop(&mut self) {
+        if !self.sent {
+            self.notifier.notify_file(self.token, FILE_ABORTED);
+        }
+    }
+}
+
+impl std::fmt::Debug for FileNotify {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileNotify")
+            .field("token", &self.token)
+            .finish()
     }
 }
 
@@ -187,6 +247,7 @@ mod tests {
         Arc::new(CloseNotifier {
             closed_queue: Arc::new(SegQueue::new()),
             drained_queue: Arc::new(SegQueue::new()),
+            file_queue: Arc::new(SegQueue::new()),
             wakeup: Arc::new(move || {
                 wakeups.fetch_add(1, Ordering::SeqCst);
             }),

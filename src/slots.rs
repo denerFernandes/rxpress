@@ -21,6 +21,8 @@ pub enum SlotResponse {
         flags: u8,
         headers: Vec<(String, String)>,
         body: Bytes,
+        /// Answers a waiting `res.sendFile()` callback when a file response ends (or is dropped).
+        file_notify: Option<crate::stream::FileNotify>,
     },
     /// Chunked streaming / SSE response
     Stream {

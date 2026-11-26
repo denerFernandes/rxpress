@@ -245,6 +245,7 @@ function createServerHandle(
         closePromise = new Promise<void>((resolve) => {
           native.beginClose(nativeCfg.shutdownTimeoutMs, () => {
             runtime.closed = true;
+            runtime.failPendingFiles();
             native.close();
             if (!closeEmitted) {
               closeEmitted = true;

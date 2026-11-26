@@ -80,6 +80,8 @@ export interface NativeServerInstance {
   drainBatchInto(buf: Buffer, maxBatch?: number): number;
   drainClosedStreams(): Uint32Array | null;
   drainStreamEvents?(): Uint32Array | null;
+  /** `[token, code, ...]` for `res.sendFile()` calls whose response ended: 0 sent, 1 not sent, else the HTTP status. */
+  drainFileEvents?(): Uint32Array | null;
   takeRequestBody(reqId: number): Array<number | Buffer> | null;
   releaseRequestBody(reqId: number): void;
   /** Upgrade requests leave the engine while JS listens for 'upgrade'. */

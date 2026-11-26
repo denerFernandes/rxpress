@@ -91,6 +91,7 @@ impl ServerShared {
             if !self.queue.is_empty()
                 || !self.closed_streams.is_empty()
                 || !self.drained_streams.is_empty()
+                || !self.close_notifier.file_queue.is_empty()
                 || self.bodies.has_ready()
                 || self.has_overflow.load(Ordering::Acquire)
             {
@@ -187,6 +188,7 @@ impl ServerShared {
             if !self.queue.is_empty()
                 || !self.closed_streams.is_empty()
                 || !self.drained_streams.is_empty()
+                || !self.close_notifier.file_queue.is_empty()
                 || self.bodies.has_ready()
             {
                 self.wake_js();
@@ -241,7 +243,18 @@ impl ServerShared {
             &self.slots,
             self.config.x_powered_by,
             self.config.etag_mode != EtagMode::Off,
+            Some(&self.close_notifier),
         );
+    }
+
+    /// `(token, code)` pairs of finished file responses (see `FileNotify`), flattened, or empty.
+    pub fn drain_file_events(&self) -> Vec<u32> {
+        let mut out = Vec::new();
+        while let Some((token, code)) = self.close_notifier.file_queue.pop() {
+            out.push(token);
+            out.push(code);
+        }
+        out
     }
 
     pub fn start_stream(
@@ -357,6 +370,7 @@ pub(crate) mod test_util {
         let close_notifier = Arc::new(CloseNotifier {
             closed_queue: closed_streams.clone(),
             drained_queue: drained_streams.clone(),
+            file_queue: Arc::new(SegQueue::new()),
             wakeup: wakeup.clone(),
             scheduled: scheduled.clone(),
         });
@@ -433,5 +447,29 @@ mod tests {
         assert_eq!(hdr & 0x7FFF_FFFF, 1);
         assert_eq!(hdr & 0x8000_0000, 0);
         assert!(!shared.scheduled.load(Ordering::SeqCst));
+    }
+
+    /// A file response that ends while JS is draining must not be missed: the drain clears
+    /// `scheduled`, so it has to look at the file queue again and wake JS if something is there.
+    #[tokio::test]
+    async fn drain_requests_into_wakes_js_again_for_pending_file_events() {
+        let shared = make_test_shared(EngineConfig::default());
+        shared
+            .close_notifier
+            .file_queue
+            .push((7, crate::stream::FILE_SENT));
+        shared.scheduled.store(true, Ordering::SeqCst);
+
+        let mut big = vec![0u8; 4096];
+        assert_eq!(shared.drain_requests_into(&mut big, 512), 0);
+        assert!(
+            shared.scheduled.load(Ordering::SeqCst),
+            "JS must be woken again for the queued file event"
+        );
+        assert_eq!(
+            shared.drain_file_events(),
+            vec![7, crate::stream::FILE_SENT]
+        );
+        assert!(shared.drain_file_events().is_empty());
     }
 }
