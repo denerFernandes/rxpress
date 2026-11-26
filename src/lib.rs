@@ -274,6 +274,7 @@ impl NativeServer {
         let close_notifier = Arc::new(CloseNotifier {
             closed_queue: closed_streams.clone(),
             drained_queue: drained_streams.clone(),
+            file_queue: Arc::new(SegQueue::new()),
             wakeup: wakeup.clone(),
             scheduled: scheduled.clone(),
         });
@@ -344,6 +345,18 @@ impl NativeServer {
             return None;
         }
         Some(Uint32Array::new(closed))
+    }
+
+    /// `[token, code, token, code, ...]` for `res.sendFile()` calls whose response has ended
+    /// (code 0: sent, 1: not sent, larger: the HTTP status answered instead), or `null`.
+    #[napi]
+    pub fn drain_file_events(&self) -> Option<Uint32Array> {
+        let shared = self.lifecycle.shared.as_ref()?;
+        let events = shared.drain_file_events();
+        if events.is_empty() {
+            return None;
+        }
+        Some(Uint32Array::new(events))
     }
 
     #[napi]
@@ -713,6 +726,7 @@ mod tests {
         let close_notifier = Arc::new(CloseNotifier {
             closed_queue: closed_streams.clone(),
             drained_queue: drained_streams.clone(),
+            file_queue: Arc::new(SegQueue::new()),
             wakeup: wakeup.clone(),
             scheduled: scheduled.clone(),
         });

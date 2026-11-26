@@ -9,6 +9,7 @@
  * loop allocates nothing beyond what each request needs.
  */
 import type { EventEmitter } from 'node:events';
+import { STATUS_CODES } from 'node:http';
 import type { Application } from '../application.js';
 import { appProtos, applyAppProtos, type ProtoApp } from '../app-protos.js';
 import { BRIDGE_HEADER, parseBridgeHeader } from '../bridge.js';
@@ -18,6 +19,7 @@ import { type BodySource, RxRequest } from '../request.js';
 import { RxResponse } from '../response.js';
 import { invokeHandler, rejectionError, type Router } from '../router.js';
 import type { NextFunction } from '../types.js';
+import { type FileCallback, registerEngineEvents } from './engine-events.js';
 import { createBodySource, deliverClosedStreams, deliverStreamEvents } from './body-streams.js';
 import type { CompiledFastRoute } from './fast-routes.js';
 import { emergencyAnswer, makeFinalHandler } from './final-handler.js';
@@ -60,6 +62,9 @@ export class ServerRuntime {
    * their paths and pass the rest on. The app is itself one such listener. While it is the only
    * one (the usual case) requests go straight to the app; otherwise they are emitted.
    */
+  /** `res.sendFile()` callbacks waiting for the engine to say how the response ended. */
+  private readonly fileCallbacks = new Map<number, FileCallback>();
+  private nextFileToken = 1;
   private requestTarget: EventEmitter | null;
   private requestEventMode: boolean;
   private unwatchRequests: (() => void) | null = null;
@@ -86,6 +91,7 @@ export class ServerRuntime {
     this.bodySource = createBodySource(native);
     this.bodyStreams = this.bodySource.bodies;
     this.upgrades = new UpgradeTargets(native, this);
+    registerEngineEvents(native, this);
     this.closing = false;
     this.closed = false;
     this.reqBuf = Buffer.allocUnsafe(INITIAL_REQ_BUF_SIZE);
@@ -595,6 +601,68 @@ export class ServerRuntime {
 
   // ---- Drain loop ----
 
+  /** @see expectFileResult */
+  public expectFile(cb: FileCallback): number {
+    if (!this.native.drainFileEvents || this.closed) return 0;
+    const token = this.nextFileToken;
+    this.nextFileToken = this.nextFileToken === 0xffffffff ? 1 : this.nextFileToken + 1;
+    this.fileCallbacks.set(token, cb);
+    return token;
+  }
+
+  public cancelFile(token: number): void {
+    this.fileCallbacks.delete(token);
+  }
+
+  /** Runs the callbacks of the file responses the engine reports as ended. */
+  private deliverFileEvents(events: Uint32Array): void {
+    for (let i = 0; i + 1 < events.length; i += 2) {
+      const cb = this.fileCallbacks.get(events[i]);
+      if (cb === undefined) continue;
+      this.fileCallbacks.delete(events[i]);
+      this.callFileback(cb, events[i + 1]);
+    }
+  }
+
+  /** The server is gone: a response still being written will not be delivered. */
+  public failPendingFiles(): void {
+    for (const [token, cb] of this.fileCallbacks) {
+      this.fileCallbacks.delete(token);
+      this.callFileback(cb, 1);
+    }
+  }
+
+  private callFileback(cb: FileCallback, code: number): void {
+    let err: Error | undefined;
+    if (code === 1) {
+      err = Object.assign(new Error('Request aborted'), {
+        code: 'ECONNABORTED',
+        status: 500,
+        statusCode: 500,
+      });
+    } else if (code !== 0) {
+      err = Object.assign(new Error(STATUS_CODES[code] ?? 'Error'), { status: code, statusCode: code });
+    }
+    try {
+      cb(err);
+    } catch (thrown) {
+      // Like an exception in any I/O callback: never inside the drain loop.
+      queueMicrotask(() => {
+        throw thrown;
+      });
+    }
+  }
+
+  /** Delivers the engine's queued notifications now (see engine-events.ts). */
+  public pollEvents(): void {
+    if (this.closed) return;
+    try {
+      this.drainStreamNotifications();
+    } catch {
+      // the next drain retries
+    }
+  }
+
   private drainStreamNotifications(): void {
     const native = this.native;
     if (native.drainStreamEvents) {
@@ -608,6 +676,11 @@ export class ServerRuntime {
       if (closedIds) {
         deliverClosedStreams(closedIds, this.activeStreams);
       }
+    }
+    // Only a sendFile() with a callback can have an event waiting: skip the call otherwise.
+    if (this.fileCallbacks.size !== 0) {
+      const fileEvents = native.drainFileEvents?.();
+      if (fileEvents) this.deliverFileEvents(fileEvents);
     }
   }
 

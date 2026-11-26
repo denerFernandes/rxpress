@@ -10,7 +10,9 @@ use super::validate::{
 };
 use crate::date::get_date_header_bytes;
 use crate::slots::{SlotResponse, SlotTable};
+use crate::stream::{CloseNotifier, FileNotify};
 use bytes::Bytes;
+use std::sync::Arc;
 
 pub const CT_TEXT_PLAIN: u8 = 1;
 pub const CT_JSON: u8 = 2;
@@ -22,6 +24,9 @@ pub const RESP_FLAG_IS_FILE: u8 = 0x02;
 pub const RESP_FLAG_SUPPRESS_POWERED_BY: u8 = 0x04;
 pub const RESP_FLAG_SUPPRESS_ETAG: u8 = 0x08;
 pub const RESP_FLAG_FILE_META: u8 = 0x10;
+/// The file request carries a trailing `u32` token: report how the response ended (see
+/// `crate::stream::FileNotify`).
+pub const RESP_FLAG_FILE_NOTIFY: u8 = 0x40;
 /// Body sent by `res.send`/`res.json`/`res.jsonp`/`res.sendStatus`: apply Express's `res.send`
 /// rules (ETag for any status, 304 when fresh, 204/205/304 body stripping). Without it the
 /// response is a plain `res.end`, which Express never tags.
@@ -317,7 +322,7 @@ fn build_wire_response(
 /// General path (ETag enabled or sendFile response): owned headers + body for the
 /// method-aware writer.
 #[inline]
-fn buffered_response(f: &Frame<'_>) -> SlotResponse {
+fn buffered_response(f: &Frame<'_>, notifier: Option<&Arc<CloseNotifier>>) -> SlotResponse {
     let block = f.headers.block;
     let mut headers = Vec::with_capacity(block.count as usize);
     for (kb, vb) in block.iter() {
@@ -326,16 +331,28 @@ fn buffered_response(f: &Frame<'_>) -> SlotResponse {
             String::from_utf8_lossy(vb).into_owned(),
         ));
     }
+    // A file request with a callback waiting ends with a u32 token that is not part of the request.
+    let mut body = f.body;
+    let mut file_notify = None;
+    if (f.flags & RESP_FLAG_FILE_NOTIFY) != 0 && body.len() >= 4 {
+        let (rest, token) = body.split_at(body.len() - 4);
+        body = rest;
+        if let Some(n) = notifier {
+            let token = u32::from_le_bytes([token[0], token[1], token[2], token[3]]);
+            file_notify = Some(FileNotify::new(token, n.clone()));
+        }
+    }
     SlotResponse::Buffered {
         status: f.status,
         content_type_code: f.ct_code,
         flags: f.flags,
         headers,
-        body: if f.body.is_empty() {
+        body: if body.is_empty() {
             Bytes::new()
         } else {
-            Bytes::copy_from_slice(f.body)
+            Bytes::copy_from_slice(body)
         },
+        file_notify,
     }
 }
 
@@ -347,6 +364,7 @@ pub fn dispatch_response_batch(
     slots: &SlotTable,
     x_powered_by: bool,
     etag_enabled: bool,
+    notifier: Option<&Arc<CloseNotifier>>,
 ) {
     let mut pos = 0usize;
     let mut num_buf = itoa::Buffer::new();
@@ -399,7 +417,7 @@ pub fn dispatch_response_batch(
             continue;
         }
 
-        slots.complete(f.req_id, buffered_response(&f));
+        slots.complete(f.req_id, buffered_response(&f, notifier));
     }
 }
 
@@ -509,7 +527,7 @@ mod tests {
             &[(b"Content-Length", b"10")],
             b"",
         );
-        dispatch_response_batch(&batch, &slots, false, false);
+        dispatch_response_batch(&batch, &slots, false, false, None);
 
         let SlotResponse::RawHttp(r) = fut_te.await else {
             panic!("expected RawHttp");
@@ -574,7 +592,7 @@ mod tests {
         );
         push_resp_frame(&mut batch, id_good, 200, CT_TEXT_PLAIN, 0, &[], b"good");
 
-        dispatch_response_batch(&batch, &slots, false, false);
+        dispatch_response_batch(&batch, &slots, false, false, None);
 
         let SlotResponse::RawHttp(r1) = fut_bad_hdr.await else {
             panic!("expected RawHttp");

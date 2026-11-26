@@ -340,8 +340,26 @@ impl<S: ConnStream> Conn<'_, '_, S> {
                 flags,
                 headers,
                 body,
+                file_notify,
             } => {
                 self.flush_before(ctx, idx).await?;
+                // A file response whose `res.sendFile()` callback is waiting: the kernel accepts
+                // the first write to a socket the client already closed, so look at the socket
+                // first (without blocking; bytes that arrive stay in the read buffer) and report
+                // a client that is gone instead of "sending" to it, as Node does when the
+                // connection has ended by the time the file is read.
+                if file_notify.is_some() && batch.pump.is_none() {
+                    let gone = match self.stream.try_read_buf_fast(&mut self.read_buf) {
+                        Ok(0) => true,
+                        Ok(_) => false,
+                        Err(e) => e.kind() != std::io::ErrorKind::WouldBlock,
+                    };
+                    if gone {
+                        drop(file_notify); // reports the response as not sent
+                        ctx.notify_aborted(self.shared, idx);
+                        return Break(false);
+                    }
+                }
                 let hb = &item.header_block;
                 let cond = CondHeaders {
                     if_none_match: str_at(hb, item.if_none_match),
@@ -365,6 +383,7 @@ impl<S: ConnStream> Conn<'_, '_, S> {
                     cond,
                     no_cache,
                     item_close,
+                    file_notify,
                 )
                 .await
                 {

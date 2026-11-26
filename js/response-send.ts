@@ -4,6 +4,7 @@
  * sendFile/download. Plain functions over the response; `RxResponse` keeps thin methods that
  * delegate here.
  */
+import { AsyncResource } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import { open, realpath, stat } from 'node:fs/promises';
 import { STATUS_CODES } from 'node:http';
@@ -15,6 +16,7 @@ import {
   CT_OCTET_STREAM,
   CT_TEXT_PLAIN,
   RESP_FLAG_FILE_META,
+  RESP_FLAG_FILE_NOTIFY,
   RESP_FLAG_IS_FILE,
   RESP_FLAG_SEND,
   RESP_FLAG_SUPPRESS_ETAG,
@@ -24,6 +26,7 @@ import { RxResponse } from './response.js';
 import { setCharset } from './response-headers.js';
 import { contentDisposition, UP_PATH_REGEXP } from './security.js';
 import type { SendFileOptions } from './types.js';
+import { cancelFileResult, expectFileResult, pollEngineEvents } from './server/engine-events.js';
 
 const MAX_AGE_CAP_SECS = 31536000;
 
@@ -587,12 +590,13 @@ function encodeFileMeta(
   maxAgeSecs: number,
   pathForRust: string,
   absRoot: string | undefined,
-  window: [number, number] | null
+  window: [number, number] | null,
+  token: number
 ): Buffer {
   const pathBytes = Buffer.from(pathForRust, 'utf8');
   const rootBytes = absRoot !== undefined ? Buffer.from(absRoot, 'utf8') : null;
   const payloadLen =
-    9 + pathBytes.length + (rootBytes ? 4 + rootBytes.length : 0) + (window ? 16 : 0);
+    9 + pathBytes.length + (rootBytes ? 4 + rootBytes.length : 0) + (window ? 16 : 0) + (token ? 4 : 0);
   const metaBuf = Buffer.allocUnsafe(payloadLen);
   let mp = 0;
   metaBuf[mp++] = optsBits;
@@ -611,7 +615,9 @@ function encodeFileMeta(
   if (window) {
     metaBuf.writeBigUInt64LE(BigInt(window[0]), mp);
     metaBuf.writeBigUInt64LE(BigInt(window[1]), mp + 8);
+    mp += 16;
   }
+  if (token) metaBuf.writeUInt32LE(token >>> 0, mp); // the engine echoes it when the response ends
   return metaBuf;
 }
 
@@ -674,6 +680,7 @@ async function sendFileAsync(
   cb: ((err?: Error) => void) | undefined
 ): Promise<void> {
   let isDir = false;
+  let token = 0;
   try {
     if (filePath.includes('\0') || (options.root && options.root.includes('\0'))) {
       throw Object.assign(new Error('Invalid null byte in path'), {
@@ -720,7 +727,9 @@ async function sendFileAsync(
     const fh = await open(canonFile, 'r');
     await fh.close();
 
-    // The client went away (or the response already ended): Express reports ECONNABORTED.
+    // The client went away (or the response already ended): Express reports ECONNABORTED. The
+    // engine may have noticed a disconnect that its wake-up has not delivered yet: look first.
+    pollEngineEvents(res._native);
     if (res.headersSent || res.writableEnded || res.req.aborted || res.destroyed) {
       if (cb) {
         cb(
@@ -774,10 +783,16 @@ async function sendFileAsync(
       }
       window = [offset, len];
     }
-    const metaBuf = encodeFileMeta(optsBits, maxAgeSecs, pathForRust, absRoot, window);
+    // With a callback, the engine reports how the response ended (sent, or not because the client
+    // went away, or the status it answered instead), so the callback runs then, as in Express.
+    // The callback runs from the engine's drain loop, so it is bound to the caller's async context
+    // (AsyncLocalStorage stores must survive into it, as they do in Express).
+    if (cb) token = expectFileResult(res._native, AsyncResource.bind(cb));
+    const metaBuf = encodeFileMeta(optsBits, maxAgeSecs, pathForRust, absRoot, window, token);
 
     res._triggerWriteHeadHook();
     let flags = RESP_FLAG_IS_FILE | RESP_FLAG_FILE_META;
+    if (token) flags |= RESP_FLAG_FILE_NOTIFY;
     if (res._suppressXpb) flags |= RESP_FLAG_SUPPRESS_POWERED_BY;
     if (!enableEtag) flags |= RESP_FLAG_SUPPRESS_ETAG;
 
@@ -791,8 +806,10 @@ async function sendFileAsync(
     );
     res._writer.flush();
     res._markFinished();
-    if (cb) cb();
+    // Without an engine that reports results the callback cannot wait for one.
+    if (cb && token === 0) cb();
   } catch (rawErr) {
+    if (token) cancelFileResult(res._native, token);
     sendFileFailed(res, rawErr, isDir, cb);
   }
 }

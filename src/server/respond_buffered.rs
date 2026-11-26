@@ -15,6 +15,7 @@ use crate::static_files::{
     decode_sendfile_payload, etag_matches, http_date_not_modified, serve_sendfile,
     write_simple_status, FileServeError,
 };
+use crate::stream::{FileNotify, FILE_SENT};
 use bytes::Bytes;
 use std::time::Duration;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -62,6 +63,7 @@ pub(super) async fn write_buffered_response<W: AsyncWrite + Unpin>(
     cond: CondHeaders<'_>,
     no_cache: bool,
     close_conn: bool,
+    file_notify: Option<FileNotify>,
 ) -> std::io::Result<bool> {
     let suppress_xpb = (flags & RESP_FLAG_SUPPRESS_POWERED_BY) != 0;
     let suppress_etag = (flags & RESP_FLAG_SUPPRESS_ETAG) != 0;
@@ -72,7 +74,17 @@ pub(super) async fn write_buffered_response<W: AsyncWrite + Unpin>(
     if (flags & RESP_FLAG_IS_FILE) != 0 {
         // Boxed: large future (file I/O), kept out of the buffered-response hot path.
         return Box::pin(write_file_response(
-            writer, write_buf, status, flags, headers, body, is_head, config, cond, close_conn,
+            writer,
+            write_buf,
+            status,
+            flags,
+            headers,
+            body,
+            is_head,
+            config,
+            cond,
+            close_conn,
+            file_notify,
         ))
         .await
         .map(|()| false);
@@ -192,6 +204,7 @@ async fn write_file_response<W: AsyncWrite + Unpin>(
     config: &EngineConfig,
     cond: CondHeaders<'_>,
     close_conn: bool,
+    file_notify: Option<FileNotify>,
 ) -> std::io::Result<()> {
     let suppress_xpb = (flags & RESP_FLAG_SUPPRESS_POWERED_BY) != 0;
     let suppress_etag = (flags & RESP_FLAG_SUPPRESS_ETAG) != 0;
@@ -202,6 +215,9 @@ async fn write_file_response<W: AsyncWrite + Unpin>(
         config.etag_mode != EtagMode::Off,
         suppress_etag,
     ) else {
+        if let Some(n) = file_notify {
+            n.finish(400);
+        }
         return write_simple_status(
             writer,
             write_buf,
@@ -228,8 +244,16 @@ async fn write_file_response<W: AsyncWrite + Unpin>(
     )
     .await
     {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            if let Some(n) = file_notify {
+                n.finish(FILE_SENT);
+            }
+            Ok(())
+        }
         Err(FileServeError::PreHeader(err_status)) => {
+            if let Some(n) = file_notify {
+                n.finish(u32::from(err_status));
+            }
             write_simple_status(
                 writer,
                 write_buf,
@@ -240,6 +264,7 @@ async fn write_file_response<W: AsyncWrite + Unpin>(
             )
             .await
         }
+        // Dropping `file_notify` reports the response as not sent.
         Err(FileServeError::StreamAborted(e)) => Err(e),
     }
 }
@@ -473,6 +498,7 @@ mod tests {
             cond,
             false,
             false,
+            None,
         )
         .await
         .unwrap();
